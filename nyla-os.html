@@ -133,7 +133,7 @@ const NAV = [
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Recently Deleted'] },
   { id:'business',   label:'Business',   sub:['Lunar Love','Halo House Collective Co.','Love Sativa','Dropshipping'] },
-  { id:'cosmic',     label:'Cosmic',     sub:['Moon Phase','Numerology','Astrology'] },
+  { id:'cosmic',     label:'Cosmic',     sub:['Moon Phase','Numerology','Astrology','Matrix of Destiny'] },
   { id:'university', label:'University', sub:['Courses','Assignments','GPA Calculator','Resources'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
   { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Appearance','Notifications','Backup & Restore'] },
@@ -1367,6 +1367,7 @@ const NotebookPanel = ({ sub }) => {
   const [headerEditing, setHeaderEditing] = useState(false);
   const [fmt, setFmt] = useState({bold:false,italic:false,underline:false,strike:false});
   const editorDomRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(()=>{ const f=folders.find(f=>f.name===sub); if(f) setActiveFid(f.id); },[sub]);
   useEffect(()=>{ const p=pages.find(p=>p.id===activePid); if(p) setHeaderTitle(p.name); },[activePid]);
@@ -1412,6 +1413,47 @@ const NotebookPanel = ({ sub }) => {
     if(existing){ setActiveFid(2); setActivePid(existing.id); setHeaderTitle(existing.name); return; }
     const pg = {id:Date.now(),name,folderId:2,content:`<h2>${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</h2><p><br></p>`,created:new Date().toISOString(),updated:new Date().toISOString()};
     savePages([...pages,pg]); setActiveFid(2); setActivePid(pg.id); setHeaderTitle(pg.name);
+  };
+
+  const uploadFiles = async (files) => {
+    const mdToHtml = (text) => {
+      const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const inline = s => s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>').replace(/`(.+?)`/g,'<code>$1</code>');
+      const lines = text.split('\n'); const out = []; let inList = false;
+      for (const line of lines) {
+        const t = line.trim();
+        if (t.startsWith('### ')) { if(inList){out.push('</ul>');inList=false;} out.push(`<h3>${inline(esc(t.slice(4)))}</h3>`); }
+        else if (t.startsWith('## ')) { if(inList){out.push('</ul>');inList=false;} out.push(`<h2>${inline(esc(t.slice(3)))}</h2>`); }
+        else if (t.startsWith('# ')) { if(inList){out.push('</ul>');inList=false;} out.push(`<h1>${inline(esc(t.slice(2)))}</h1>`); }
+        else if (t.startsWith('- ')||t.startsWith('* ')) { if(!inList){out.push('<ul>');inList=true;} out.push(`<li>${inline(esc(t.slice(2)))}</li>`); }
+        else if (t==='') { if(inList){out.push('</ul>');inList=false;} out.push('<p><br></p>'); }
+        else { if(inList){out.push('</ul>');inList=false;} out.push(`<p>${inline(esc(line))}</p>`); }
+      }
+      if(inList) out.push('</ul>');
+      return out.join('')||'<p><br></p>';
+    };
+    const newPages = []; const base = Date.now();
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const name = file.name.replace(/\.[^/.]+$/, '');
+      let content = '';
+      if (file.type === 'application/pdf') {
+        content = `<p><em>📄 PDF uploaded: <strong>${file.name}</strong></em></p><p>PDF text cannot be extracted automatically — paste your content below:</p><p><br></p>`;
+      } else {
+        try {
+          const text = await file.text();
+          content = file.name.endsWith('.md')
+            ? mdToHtml(text)
+            : text.split('\n\n').map(p=>p.trim()).filter(Boolean).map(p=>`<p>${p.replace(/\n/g,'<br>')}</p>`).join('') || '<p><br></p>';
+        } catch(e) { content = `<p><em>Imported: ${file.name}</em></p><p><br></p>`; }
+      }
+      newPages.push({id:base+i,name,folderId:activeFid,content,created:new Date().toISOString(),updated:new Date().toISOString()});
+    }
+    if (newPages.length > 0) {
+      savePages([...pages,...newPages]);
+      const last = newPages[newPages.length-1];
+      setActivePid(last.id); setHeaderTitle(last.name);
+    }
   };
 
   const deletePage = id => {
@@ -1470,6 +1512,8 @@ const NotebookPanel = ({ sub }) => {
         <div style={{padding:'10px 10px 6px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:4}}>
           <button onClick={addDailyNote} style={{flex:1,padding:'5px 8px',borderRadius:8,background:`${C.lavender}70`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',textAlign:'left',fontWeight:500}}>📅 Daily Note</button>
           <button onClick={()=>{setShowSearch(s=>!s);setSearchQ('');}} style={{padding:'5px 8px',borderRadius:8,background:showSearch?C.accent:'transparent',border:`0.5px solid ${C.border}`,color:showSearch?'#fff':C.textMuted,fontSize:12,cursor:'pointer'}} title="Search notes">🔍</button>
+          <button onClick={()=>fileInputRef.current&&fileInputRef.current.click()} style={{padding:'5px 8px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:12,cursor:'pointer'}} title="Upload file(s) to notebook">📎</button>
+          <input ref={fileInputRef} type="file" multiple accept=".txt,.md,.pdf,.csv,.doc,.docx" style={{display:'none'}} onChange={e=>{if(e.target.files?.length)uploadFiles(Array.from(e.target.files));e.target.value='';}}/>
           <button onClick={()=>setShowGraph(g=>!g)} style={{padding:'5px 8px',borderRadius:8,background:showGraph?C.rose:'transparent',border:`0.5px solid ${C.border}`,color:showGraph?'#fff':C.textMuted,fontSize:13,cursor:'pointer',lineHeight:1}} title="Graph view">⬡</button>
         </div>
 
@@ -1708,6 +1752,7 @@ const NotebookPanel = ({ sub }) => {
             <div style={{display:'flex',gap:10}}>
               <button onClick={addDailyNote} style={{padding:'9px 20px',borderRadius:10,background:`${C.lavender}70`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:13,cursor:'pointer'}}>📅 Daily Note</button>
               <button onClick={addPage} style={{padding:'9px 20px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer'}}>+ New Page</button>
+              <button onClick={()=>fileInputRef.current&&fileInputRef.current.click()} style={{padding:'9px 20px',borderRadius:10,background:`${C.lavender}70`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:13,cursor:'pointer'}}>📎 Upload File</button>
             </div>
           </div>
         )}
@@ -2525,12 +2570,21 @@ const NumerologyPanel = () => {
   const yr=now.getFullYear(), mo=now.getMonth()+1, dy=now.getDate();
   const pYear=getPersonalYear(yr), pMonth=getPersonalMonth(yr,mo), pDay=getPersonalDay(yr,mo,dy);
 
-  // Name numerology for "Nyla"
   const PYTH = {A:1,B:2,C:3,D:4,E:5,F:6,G:7,H:8,I:9,J:1,K:2,L:3,M:4,N:5,O:6,P:7,Q:8,R:9,S:1,T:2,U:3,V:4,W:5,X:6,Y:7,Z:8};
   const VOWELS_SET = new Set(['A','E','I','O','U','Y']);
-  const NAME_LETTERS = ['N','Y','L','A'];
-  const SOUL_URGE  = reduceNum(NAME_LETTERS.filter(l=>VOWELS_SET.has(l)).reduce((a,l)=>a+(PYTH[l]||0),0)); // Y=7+A=1=8
-  const EXPRESSION = reduceNum(NAME_LETTERS.reduce((a,l)=>a+(PYTH[l]||0),0)); // 5+7+3+1=16→7
+  const FIRST=['N','Y','L','A'], MID=['I','M','A','N'], LAST=['B','R','O','W','N'];
+  const nameVal = arr => reduceNum(arr.reduce((a,l)=>a+(PYTH[l]||0),0));
+  const EXPR_F=nameVal(FIRST), EXPR_M=nameVal(MID), EXPR_L=nameVal(LAST);
+  const EXPRESSION = reduceNum(EXPR_F+EXPR_M+EXPR_L);
+  const SU_F=reduceNum(FIRST.filter(l=>VOWELS_SET.has(l)).reduce((a,l)=>a+(PYTH[l]||0),0));
+  const SU_M=reduceNum(MID.filter(l=>VOWELS_SET.has(l)).reduce((a,l)=>a+(PYTH[l]||0),0));
+  const SU_L=reduceNum(LAST.filter(l=>VOWELS_SET.has(l)).reduce((a,l)=>a+(PYTH[l]||0),0));
+  const SOUL_URGE = reduceNum(SU_F+SU_M+SU_L);
+  const PERS_F=reduceNum(FIRST.filter(l=>!VOWELS_SET.has(l)).reduce((a,l)=>a+(PYTH[l]||0),0));
+  const PERS_M=reduceNum(MID.filter(l=>!VOWELS_SET.has(l)).reduce((a,l)=>a+(PYTH[l]||0),0));
+  const PERS_L=reduceNum(LAST.filter(l=>!VOWELS_SET.has(l)).reduce((a,l)=>a+(PYTH[l]||0),0));
+  const PERSONALITY = reduceNum(PERS_F+PERS_M+PERS_L);
+  const BIRTHDAY = reduceNum(BIRTH_DAY);
 
   const PY_MEANINGS = {
     1:'A year of bold beginnings. The universe hands you a blank canvas — step into your power, initiate new projects, and trust your independence. What you plant in a Personal Year 1 grows for the next nine years.',
@@ -2586,54 +2640,111 @@ const NumerologyPanel = () => {
     </Card>
   );
 
-  const NUM_SYS = `You are an expert numerologist. The user's name is Nyla, birthdate November 23 2005. Life Path 5, Leo Rising, Sagittarius Sun. Answer numerology questions in depth, calculate numbers on request, and give personalized readings.`;
+  const NUM_SYS = `You are an expert numerologist. The user is Nyla Iman Brown, born November 23 2005 in Los Angeles, CA. Core numbers: Life Path 5 (Adventurer), Expression 8 (Manifestor), Soul Urge 6 (Nurturer), Personality 2 (Diplomat), Birthday 5. Chart: Sagittarius Sun, Virgo Moon, Leo Rising. Answer in depth, calculate any number on request, give personalized readings.`;
+
+  const CoreNum = ({n,label,sub,color}) => (
+    <div style={{textAlign:'center',padding:'11px 6px',background:`${color}18`,borderRadius:10,border:`0.5px solid ${color}30`}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:28,color,fontWeight:700,lineHeight:1}}>{n}</div>
+      <div style={{fontSize:9.5,fontWeight:700,color,marginTop:4,letterSpacing:0.2}}>{label}</div>
+      <div style={{fontSize:9,color:C.textMuted,marginTop:2,lineHeight:1.3}}>{sub}</div>
+    </div>
+  );
 
   return (
-    <div className="fade-in" style={{ maxWidth:660 }}>
+    <div className="fade-in" style={{maxWidth:640,padding:'0 2px'}}>
       <PageTitle>Numerology</PageTitle>
 
-      {/* Life Path Hero */}
-      <Card style={{ background:`linear-gradient(135deg,${C.lavender}80,${C.pink}50)`, padding:'26px 28px', marginBottom:20 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:18, marginBottom:16 }}>
-          <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:72, color:C.rose, fontWeight:700, lineHeight:1 }}>5</div>
+      {/* 5-number core grid */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:7,marginBottom:13}}>
+        <CoreNum n={LIFE_PATH}   label="Life Path"   sub="Soul's mission"  color={C.rose}/>
+        <CoreNum n={EXPRESSION}  label="Expression"  sub="Destiny & gifts" color="#7B5EA7"/>
+        <CoreNum n={SOUL_URGE}   label="Soul Urge"   sub="Heart's desire"  color="#5B8ED6"/>
+        <CoreNum n={PERSONALITY} label="Personality" sub="Outer self"      color="#5BA888"/>
+        <CoreNum n={BIRTHDAY}    label="Birthday"    sub="Special talent"  color="#C4904A"/>
+      </div>
+
+      {/* Life Path hero */}
+      <Card style={{background:`linear-gradient(135deg,${C.lavender}70,${C.pink}40)`,padding:'15px 18px',marginBottom:11}}>
+        <div style={{display:'flex',alignItems:'center',gap:13,marginBottom:8}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:44,color:C.rose,fontWeight:700,lineHeight:1,minWidth:50,textAlign:'center'}}>{LIFE_PATH}</div>
           <div>
-            <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:24, color:C.rose }}>Life Path 5</div>
-            <div style={{ fontSize:13, color:C.textLight }}>The Adventurer · Your Soul's Core Mission</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:C.rose}}>Life Path 5 — The Adventurer</div>
+            <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>Soul's core mission · 11 + 5 + 7 = 23 → 5</div>
           </div>
         </div>
-        <div style={{ fontSize:13.5, color:C.rose, lineHeight:1.85 }}>
-          <p style={{ marginBottom:10 }}>Life Path 5 is the number of freedom, transformation, and insatiable curiosity. You are here to experience life fully — not to settle into comfort, but to taste every flavour the world has to offer. You are a natural born adventurer, and the universe keeps your path dynamic by design.</p>
-          <p style={{ marginBottom:10 }}>You possess a magnetic adaptability that allows you to thrive in change where others freeze. New places, new ideas, new people — these are not disruptions for you, they are fuel. Your gift is your ability to connect with almost anyone, to see the beauty in the unconventional, and to inspire others through your fearless living.</p>
-          <p style={{ marginBottom:10 }}>Your greatest challenge is learning the difference between freedom and avoidance. Life Path 5s sometimes flee commitment or routine, mistaking discipline for limitation. But true freedom, for you, comes through intentional structure — the freedom to dream requires the foundation to stand on.</p>
-          <p>In this lifetime, you are here to be a catalyst. Your experiences — especially the unexpected detours — are your curriculum. Trust the chaos. It is custom-designed for your evolution.</p>
-        </div>
+        <div style={{fontSize:11.5,color:C.rose,lineHeight:1.8}}>Life Path 5 is the vibration of freedom, transformation, and insatiable curiosity. You are here to experience life fully — not to settle, but to taste every flavour the world offers. You are a catalyst: wherever you go, things change and people wake up. Your adaptability and magnetic presence allow you to thrive in perpetual motion. The challenge is learning that true freedom comes through intentional structure — the freedom to dream requires a foundation. Your unexpected detours are custom-designed for your evolution; trust them entirely.</div>
       </Card>
 
-      {/* Personal Cycles Grid */}
-      <SectionHeading>Personal Cycles — {yr}</SectionHeading>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:16 }}>
+      {/* Full name breakdown */}
+      <SectionHeading style={{marginBottom:7}}>Full Name — Nyla Iman Brown</SectionHeading>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:7,marginBottom:11}}>
         {[
-          {num:pYear,  label:`Personal Year`,  sub:`${yr} · 9-year cycle`},
-          {num:pMonth, label:`Personal Month`, sub:`${new Date(yr,mo-1).toLocaleString('en',{month:'long'})} ${yr}`},
-          {num:pDay,   label:`Personal Day`,   sub:`Today · ${now.toLocaleDateString('en-US',{month:'short',day:'numeric'})}`},
-        ].map(n=>(
-          <Card key={n.label} style={{ textAlign:'center', padding:'18px 12px' }}>
-            <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:40, color:C.rose, fontWeight:700, lineHeight:1 }}>{n.num}</div>
-            <div style={{ fontSize:12, fontWeight:600, color:C.rose, marginTop:6 }}>{n.label}</div>
-            <div style={{ fontSize:11, color:C.textLight, marginTop:2 }}>{n.sub}</div>
+          {name:'NYLA', letters:FIRST,val:EXPR_F,role:'First Name'},
+          {name:'IMAN', letters:MID,  val:EXPR_M,role:'Middle Name'},
+          {name:'BROWN',letters:LAST, val:EXPR_L,role:'Last Name'},
+        ].map(({name,letters,val,role})=>(
+          <Card key={name} style={{padding:'10px 11px',background:`${C.lavender}22`}}>
+            <div style={{fontSize:9.5,color:C.textMuted,marginBottom:5,letterSpacing:0.4}}>{role}</div>
+            <div style={{display:'flex',gap:3,flexWrap:'wrap',marginBottom:6}}>
+              {letters.map((l,i)=>(
+                <div key={i} style={{textAlign:'center'}}>
+                  <div style={{fontSize:10.5,fontWeight:700,color:C.rose,background:`${C.pink}40`,borderRadius:4,width:17,height:17,display:'flex',alignItems:'center',justifyContent:'center'}}>{l}</div>
+                  <div style={{fontSize:8,color:C.textMuted,marginTop:1}}>{PYTH[l]}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:10,color:C.textMuted}}>→ <span style={{color:C.rose,fontWeight:700,fontSize:15}}>{val}</span></div>
           </Card>
         ))}
       </div>
-      <NumRow num={pYear}  label={`Personal Year ${pYear} — ${NUM_INFO[pYear]?.name||''}`}  sub={`${yr} · ${NUM_INFO[pYear]?.theme||''}`}  meaning={PY_MEANINGS[pYear]||''} />
-      <NumRow num={pMonth} label={`Personal Month ${pMonth} — ${NUM_INFO[pMonth]?.name||''}`} sub={`${new Date(yr,mo-1).toLocaleString('en',{month:'long'})} energy`} meaning={PM_MEANINGS[pMonth]||''} />
-      <NumRow num={pDay}   label={`Personal Day ${pDay}`} sub="Today's energy" meaning={PD_MEANINGS[pDay]||''} />
 
-      {/* Name Numbers */}
-      <SectionHeading style={{ marginTop:22 }}>Name Numbers — Nyla</SectionHeading>
-      <NumRow num={SOUL_URGE}  label={`Soul Urge ${SOUL_URGE} — The Manifestor`} sub="Your heart's deepest desire · vowels of your name"
-        meaning="Your Soul Urge 8 reveals a deep inner drive for mastery, authority, and abundance. At your core, you crave success not just for yourself, but as a vehicle for real impact. You are drawn to building empires — emotional, financial, creative. Power used with integrity is your birthright, and you know it. The world is simply waiting for you to fully claim it." />
-      <NumRow num={EXPRESSION} label={`Expression ${EXPRESSION} — The Seeker`} sub="Your natural gifts and how you shine · all letters of your name"
-        meaning="Your Expression 7 shows that your natural gifts lie in analysis, depth, and spiritual intelligence. You express yourself most powerfully through research, writing, and wisdom. You are the seeker — others come to you for answers, insight, and perspective. Your greatest work emerges from solitude, study, and the quiet confidence of someone who truly knows." />
+      {/* Name number cards */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7,marginBottom:13}}>
+        {[
+          {n:EXPRESSION, label:'Expression 8',  title:'The Manifestor', desc:'All letters · born to claim power, build legacy, and lead with authority. You are here to achieve something real and enduring that outlives the moment.'},
+          {n:SOUL_URGE,  label:'Soul Urge 6',   title:'The Nurturer',   desc:'Vowels only · at your core you crave beauty, love, harmony, and to deeply care for the people and world around you. Home and heart are your anchors.'},
+          {n:PERSONALITY,label:'Personality 2', title:'The Diplomat',   desc:'Consonants · the world sees you as graceful, empathic, and quietly powerful. You bring people together effortlessly and lead through emotional intelligence.'},
+          {n:BIRTHDAY,   label:'Birthday 5',    title:'The Free Spirit',desc:'Born on the 23rd (2+3=5) · natural talent for adaptability, magnetism, and inspiring movement in others. You lead simply by living fully.'},
+        ].map(({n,label,title,desc})=>(
+          <Card key={label} style={{padding:'10px 12px',display:'flex',gap:9,alignItems:'flex-start'}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:24,color:C.rose,fontWeight:700,lineHeight:1,minWidth:26,marginTop:1}}>{n}</div>
+            <div>
+              <div style={{fontSize:10.5,fontWeight:700,color:C.rose}}>{label} — {title}</div>
+              <div style={{fontSize:10.5,color:C.textMuted,marginTop:3,lineHeight:1.55}}>{desc}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Personal Cycles */}
+      <SectionHeading style={{marginBottom:7}}>Personal Cycles — {yr}</SectionHeading>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:7,marginBottom:9}}>
+        {[
+          {n:pYear, label:'Personal Year', sub:`${yr}`},
+          {n:pMonth,label:'Personal Month',sub:new Date(yr,mo-1).toLocaleString('en',{month:'long'})},
+          {n:pDay,  label:'Personal Day',  sub:'Today'},
+        ].map(({n,label,sub})=>(
+          <Card key={label} style={{textAlign:'center',padding:'11px 7px'}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:30,color:C.rose,fontWeight:700,lineHeight:1}}>{n}</div>
+            <div style={{fontSize:10,fontWeight:600,color:C.rose,marginTop:4}}>{label}</div>
+            <div style={{fontSize:9.5,color:C.textMuted,marginTop:2}}>{sub}</div>
+            <div style={{fontSize:9.5,color:C.textMuted,marginTop:5,lineHeight:1.4}}>{NUM_INFO[n]?.theme||''}</div>
+          </Card>
+        ))}
+      </div>
+      {[
+        {n:pYear, label:`Personal Year ${pYear}`, theme:NUM_INFO[pYear]?.name||'',  meanings:PY_MEANINGS},
+        {n:pMonth,label:`Personal Month ${pMonth}`,theme:NUM_INFO[pMonth]?.name||'',meanings:PM_MEANINGS},
+        {n:pDay,  label:`Personal Day ${pDay}`,   theme:NUM_INFO[pDay]?.name||'',   meanings:PD_MEANINGS},
+      ].map(({n,label,theme,meanings})=>(
+        <Card key={label} style={{marginBottom:7,padding:'10px 13px',background:`${C.lavender}22`}}>
+          <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:5}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:C.rose,fontWeight:700,lineHeight:1,minWidth:24}}>{n}</div>
+            <div style={{fontSize:10.5,fontWeight:600,color:C.rose}}>{label} · {theme}</div>
+          </div>
+          <div style={{fontSize:11,color:C.rose,lineHeight:1.75}}>{meanings[n]||''}</div>
+        </Card>
+      ))}
 
       <CosmicChat systemPrompt={NUM_SYS} placeholder="Ask about your numbers, personal year, name numerology..." />
     </div>
@@ -2690,6 +2801,39 @@ const SEASON_FOR_NYLA = {
   'Pisces':      'Pisces season softens your edges beautifully. Your Virgo Moon\'s tendency to analyse quiets down, and you\'re invited into deep creativity, spiritual rest, and emotional softness. Let yourself receive. Not everything needs to be solved.',
 };
 
+const BirthChartWheel = () => {
+  const CX=150,CY=150,RO=138,RS=105,RP=72,RC=50;
+  const SIGNS=[{g:'♈',e:'fire'},{g:'♉',e:'earth'},{g:'♊',e:'air'},{g:'♋',e:'water'},{g:'♌',e:'fire'},{g:'♍',e:'earth'},{g:'♎',e:'air'},{g:'♏',e:'water'},{g:'♐',e:'fire'},{g:'♑',e:'earth'},{g:'♒',e:'air'},{g:'♓',e:'water'}];
+  const EC={fire:'rgba(220,90,100,0.35)',earth:'rgba(100,170,100,0.35)',air:'rgba(190,170,60,0.35)',water:'rgba(80,110,200,0.35)'};
+  const ET={fire:'#E07080',earth:'#60A870',air:'#B8A030',water:'#5070C0'};
+  const PLANETS=[{g:'☉',s:8},{g:'☽',s:5},{g:'AC',s:4},{g:'☿',s:8},{g:'♀',s:9},{g:'♂',s:1},{g:'♃',s:7},{g:'♄',s:4},{g:'♅',s:11},{g:'♆',s:10},{g:'♇',s:8}];
+  const bySign={};
+  PLANETS.forEach(p=>{if(!bySign[p.s])bySign[p.s]=[];bySign[p.s].push(p);});
+  const xy=(r,deg)=>{const a=(deg-90)*Math.PI/180;return[CX+r*Math.cos(a),CY+r*Math.sin(a)];};
+  const arc=(ro,ri,s,e)=>{const[x1,y1]=xy(ro,s);const[x2,y2]=xy(ro,e);const[x3,y3]=xy(ri,e);const[x4,y4]=xy(ri,s);return `M${x1},${y1} A${ro},${ro} 0 0,1 ${x2},${y2} L${x3},${y3} A${ri},${ri} 0 0,0 ${x4},${y4}Z`;};
+  return (
+    <svg width="300" height="300" viewBox="0 0 300 300" style={{maxWidth:'100%',display:'block',margin:'0 auto'}}>
+      <defs>
+        <radialGradient id="cg"><stop offset="0%" stopColor="#3a0a50"/><stop offset="100%" stopColor="#0e0020"/></radialGradient>
+        <radialGradient id="bg"><stop offset="0%" stopColor="#1a0530"/><stop offset="100%" stopColor="#08001a"/></radialGradient>
+        <filter id="glow"><feGaussianBlur stdDeviation="1.5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <circle cx={CX} cy={CY} r={RO+2} fill="url(#bg)"/>
+      {SIGNS.map((sg,i)=><path key={i} d={arc(RO,RS,i*30,i*30+30)} fill={EC[sg.e]} stroke="rgba(255,255,255,0.12)" strokeWidth="0.5"/>)}
+      {SIGNS.map((sg,i)=><path key={'p'+i} d={arc(RS,RP,i*30,i*30+30)} fill={bySign[i]?EC[sg.e].replace('0.35','0.15'):'rgba(255,255,255,0.03)'} stroke="rgba(255,255,255,0.08)" strokeWidth="0.5"/>)}
+      {SIGNS.map((_,i)=>{const[x1,y1]=xy(RP,i*30);const[x2,y2]=xy(RO,i*30);return <line key={'d'+i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,255,255,0.15)" strokeWidth="0.5"/>;} )}
+      {SIGNS.map((sg,i)=>{const[x,y]=xy((RO+RS)/2,i*30+15);return <text key={'s'+i} x={x} y={y} textAnchor="middle" dominantBaseline="central" fontSize="13" fill={ET[sg.e]}>{sg.g}</text>;})}
+      {Object.entries(bySign).map(([si,ps])=>ps.map((p,j)=>{const n=ps.length;const[x,y]=xy((RS+RP)/2,parseInt(si)*30+15+(j-(n-1)/2)*9);const isAC=p.g==='AC';return(<g key={si+'-'+j} filter="url(#glow)"><circle cx={x} cy={y} r={isAC?6.5:5.5} fill="rgba(255,220,80,0.2)" stroke="rgba(255,220,80,0.5)" strokeWidth="0.5"/><text x={x} y={y} textAnchor="middle" dominantBaseline="central" fontSize={isAC?6.5:9} fill="#FFE080" fontWeight="bold">{p.g}</text></g>);}))}
+      <circle cx={CX} cy={CY} r={RP} fill="url(#bg)" stroke="rgba(255,255,255,0.12)" strokeWidth="0.5"/>
+      <circle cx={CX} cy={CY} r={RC} fill="url(#cg)" stroke="rgba(255,255,255,0.18)" strokeWidth="0.5"/>
+      <text x={CX} y={CY-13} textAnchor="middle" fontSize="12" fill="#E8D0F5" fontFamily="'DM Serif Display',serif">Nyla Iman Brown</text>
+      <text x={CX} y={CY+3} textAnchor="middle" fontSize="8.5" fill="#A080C0">♐ Sun · ♍ Moon · ♌ Rising</text>
+      <text x={CX} y={CY+16} textAnchor="middle" fontSize="8" fill="#705090">11·23·2005 · Los Angeles</text>
+      <circle cx={CX} cy={CY} r={RO+1} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1"/>
+    </svg>
+  );
+};
+
 const CHART_PLACEMENTS = [
   { planet:'Sun ☀️', sign:'Sagittarius', symbol:'♐', element:'Fire', ruling:'Jupiter',
     desc:'Your Sagittarius Sun is the engine of your entire personality — expansive, philosophical, and fuelled by the quest for truth. You are not built for small lives. You crave experiences that stretch your mind and spirit: travel, learning, meaningful conversations, and the freedom to keep becoming. You are fiercely honest, sometimes to a fault, and you lead with a generosity of spirit that draws people into your orbit. The shadow side of Sagittarius is restlessness — a tendency to leap before you land or to philosophise instead of commit. But at your core, you are a seeker, and that seeking is your greatest gift.' },
@@ -2703,47 +2847,195 @@ const CHART_PLACEMENTS = [
     desc:'Venus in Capricorn describes your love language — serious, loyal, and deeply invested. You do not fall in love lightly. You are drawn to people who are ambitious, reliable, and who show their love through actions rather than words. In relationships, you value longevity and respectability, and you are the partner who quietly builds something lasting. Capricorn Venus can come across as reserved or hard to read — not because you feel less, but because you protect your heart and take love seriously. Over time, your partners discover a deeply devoted, quietly romantic soul who loves through dedication and time.' },
   { planet:'Mars ♂', sign:'Taurus', symbol:'♉', element:'Earth', ruling:'Venus',
     desc:'Mars in Taurus governs your drive, ambition, and how you take action — slowly, methodically, and with remarkable staying power. You do not sprint; you build. Once you commit to a goal, nothing will make you abandon it. You pursue what you want with patience, which means your success tends to be deeply rooted and lasting. Taurus Mars also means your drive is tied to physical pleasure and material security: you are motivated by beauty, comfort, and the tangible rewards of your effort. The shadow is stubbornness — an unwillingness to pivot when circumstances demand it. But this same quality makes you one of the most unstoppable forces in the room.' },
+  { planet:'Jupiter ♃', sign:'Scorpio', symbol:'♏', element:'Water', ruling:'Pluto/Mars',
+    desc:'Jupiter in Scorpio — the planet of expansion in the sign of depth and transformation — gives you an extraordinary capacity to access hidden resources, both inner and outer. Your luck and growth come through deep work: research, psychology, intimacy, occult knowledge, or anything that most people avoid. You are gifted at finding what is concealed, whether that is a hidden business opportunity, a buried emotional truth, or a spiritual mystery. You magnetise abundance through intensity and transformation. Jupiter here also amplifies your power of regeneration — you rise from setbacks in ways that genuinely surprise people.' },
+  { planet:'Saturn ♄', sign:'Leo', symbol:'♌', element:'Fire', ruling:'The Sun',
+    desc:'Saturn in Leo places your lessons around self-expression, creative authority, and the right to shine. Early in life, you may have questioned whether you were truly worthy of visibility or leadership — Saturn in the sign of the performer tests you there first. Over time, however, Saturn rewards the effort: as you build consistent creative discipline and learn to lead from genuine inner confidence rather than external validation, you earn a natural authority that becomes unshakeable. Your Leo Rising amplifies this — you are literally being asked by the cosmos to master the art of authentic self-expression as one of your life\'s primary themes.' },
+  { planet:'Uranus ♅', sign:'Pisces', symbol:'♓', element:'Water', ruling:'Neptune',
+    desc:'Uranus in Pisces (generational: 2003–2011) marks your generation as the bridge-builders between the digital and the spiritual. You and your peers are wired for revolutionary approaches to consciousness, healing, and creativity. For you personally, Uranus in Pisces activates sudden awakenings through dreams, spiritual downloads, and unexpected creative breakthroughs. You may experience your most radical insights in quiet, surrendered moments — the shower, the half-asleep edge of night — rather than in loud, analytical ones. This placement rewards those who trust the invisible.' },
+  { planet:'Neptune ♆', sign:'Aquarius', symbol:'♒', element:'Air', ruling:'Uranus',
+    desc:'Neptune in Aquarius (generational: 1998–2012) dissolves the boundaries between the individual and the collective — your generation is dissolving old structures of community, technology, and collective identity. For you personally, this places idealistic, visionary energy in the realm of innovation and community. You are drawn to use creativity and spiritual insight in service of something larger than yourself. You may feel called to build communities, platforms, or spaces that hold others — and you do so with a subtle but powerful magnetic idealism.' },
+  { planet:'Pluto ♇', sign:'Sagittarius', symbol:'♐', element:'Fire', ruling:'Mars/Pluto',
+    desc:'Pluto in Sagittarius (generational: 1995–2008) places transformative, annihilating power in the sign of philosophy, truth, and worldview — your generation is here to destroy false belief systems and rebuild them from the ground up. For you personally, with your Sun also in Sagittarius, this is especially potent: you carry within you the archetype of the truth-seeker who is not just seeking truth, but transforming it. You feel deeply that the old narratives — about race, religion, meaning, and power — need to be dismantled. You were born for the rewrite.' },
 ];
 
 const AstrologyPanel = () => {
   const season = getCurrentSeason();
-  const ASTRO_SYS = `You are an expert astrologer. The user's chart is: Sagittarius Sun, Virgo Moon, Leo Rising, Mercury in Sagittarius, Venus in Capricorn, Mars in Taurus, born November 23 2005 at 9:18 PM in Los Angeles. Answer questions about their chart, transits, and astrology in depth.`;
+  const [openIdx, setOpenIdx] = useState(null);
+  const ASTRO_SYS = `You are an expert astrologer. Nyla Iman Brown's chart: Sagittarius Sun (~1°), Virgo Moon, Leo Rising, Mercury in Sagittarius, Venus in Capricorn, Mars in Taurus, Jupiter in Scorpio, Saturn in Leo, Uranus in Pisces, Neptune in Aquarius, Pluto in Sagittarius. Born November 23 2005, Los Angeles CA. Answer all chart questions in depth, discuss transits, synastry, progressions, and placements with specificity.`;
+
+  const EL_BADGE = {Fire:'#E0607070',Earth:'#60A87050',Air:'#C0A83050',Water:'#6080C050'};
 
   return (
-    <div className="fade-in" style={{ maxWidth:680 }}>
+    <div className="fade-in" style={{maxWidth:680,padding:'0 2px'}}>
       <PageTitle>Astrology</PageTitle>
 
-      {/* Current Season */}
-      <Card style={{ background:C.gradNight, padding:'22px 26px', marginBottom:16 }}>
-        <div style={{ fontSize:11.5, color:'#9070C0', fontWeight:600, letterSpacing:0.5, textTransform:'uppercase', marginBottom:6 }}>Current Astrological Season</div>
-        <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:26, color:'#E8D0F5', marginBottom:10 }}>
-          {SEASON_SYMBOLS[season]||'✦'} {season} Season
+      {/* Chart wheel + season side-by-side */}
+      <div style={{display:'flex',gap:12,marginBottom:12,alignItems:'flex-start',flexWrap:'wrap'}}>
+        <Card style={{background:C.gradNight,padding:'14px',flexShrink:0,minWidth:220}}>
+          <div style={{fontSize:9,color:'#9070C0',fontWeight:700,letterSpacing:0.8,textTransform:'uppercase',marginBottom:8,textAlign:'center'}}>Birth Chart · Natal Wheel</div>
+          <BirthChartWheel/>
+          <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:10,justifyContent:'center'}}>
+            {[['☉','Sun','Sag'],['☽','Moon','Vir'],['AC','Rising','Leo'],['☿','Merc','Sag'],['♀','Venus','Cap'],['♂','Mars','Tau'],['♃','Jup','Sco'],['♄','Sat','Leo'],['♅','Ura','Pis'],['♆','Nep','Aqu'],['♇','Plu','Sag']].map(([g,n,s])=>(
+              <div key={n} style={{fontSize:8.5,color:'#C0A0E0',background:'rgba(255,255,255,0.06)',borderRadius:5,padding:'2px 5px',textAlign:'center'}}>
+                <span style={{color:'#FFE080'}}>{g}</span> {s}
+              </div>
+            ))}
+          </div>
+        </Card>
+        <div style={{flex:1,minWidth:200,display:'flex',flexDirection:'column',gap:10}}>
+          <Card style={{background:C.gradNight,padding:'14px 16px'}}>
+            <div style={{fontSize:9,color:'#9070C0',fontWeight:700,letterSpacing:0.8,textTransform:'uppercase',marginBottom:6}}>Current Season</div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:'#E8D0F5',marginBottom:7}}>{SEASON_SYMBOLS[season]||'✦'} {season} Season</div>
+            <div style={{fontSize:11,color:'#B090D0',lineHeight:1.7}}>{SEASON_DESC[season]||''}</div>
+          </Card>
+          <Card style={{background:`linear-gradient(135deg,${C.lavender}50,${C.pink}25)`,padding:'12px 14px'}}>
+            <div style={{fontSize:9,color:C.textMuted,fontWeight:700,letterSpacing:0.8,textTransform:'uppercase',marginBottom:5}}>✦ What This Means for You</div>
+            <div style={{fontSize:11,color:C.rose,lineHeight:1.7}}>{SEASON_FOR_NYLA[season]||''}</div>
+          </Card>
         </div>
-        <div style={{ fontSize:13.5, color:'#C0A0E0', lineHeight:1.8 }}>{SEASON_DESC[season]||''}</div>
-      </Card>
+      </div>
 
-      {/* What this means for Nyla */}
-      <Card style={{ background:`linear-gradient(135deg,${C.lavender}60,${C.pink}30)`, padding:'18px 22px', marginBottom:22 }}>
-        <SectionHeading>✦ What This Season Means for You</SectionHeading>
-        <div style={{ fontSize:13.5, color:C.rose, lineHeight:1.85 }}>{SEASON_FOR_NYLA[season]||''}</div>
-      </Card>
-
-      {/* Birth Chart — Full Placements */}
-      <SectionHeading>Nyla's Birth Chart — All Placements</SectionHeading>
-      <div style={{ display:'flex', flexDirection:'column', gap:12, marginBottom:20 }}>
-        {CHART_PLACEMENTS.map(p=>(
-          <Card key={p.planet} style={{ padding:'18px 20px', background:`linear-gradient(135deg,${C.pinkLight},${C.lavLight})` }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
-              <div style={{ fontSize:11.5, fontWeight:700, color:C.rose, letterSpacing:0.3 }}>{p.planet}</div>
-              <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:15, color:C.rose }}>{p.symbol} {p.sign}</div>
-              <div style={{ fontSize:11, color:C.textMuted, marginLeft:'auto' }}>{p.element} · {p.ruling}</div>
+      {/* Placements — collapsible */}
+      <SectionHeading style={{marginBottom:8}}>Birth Chart — Full Placements</SectionHeading>
+      <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
+        {CHART_PLACEMENTS.map((p,i)=>(
+          <Card key={p.planet} style={{padding:'10px 13px',background:`linear-gradient(135deg,${C.pinkLight},${C.lavLight})`,cursor:'pointer'}} onClick={()=>setOpenIdx(openIdx===i?null:i)}>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:C.rose,minWidth:22}}>{p.symbol}</div>
+              <div style={{flex:1}}>
+                <span style={{fontSize:11,fontWeight:700,color:C.rose}}>{p.planet}</span>
+                <span style={{fontSize:11,color:C.rose}}> in {p.sign}</span>
+              </div>
+              <div style={{display:'flex',gap:5,alignItems:'center'}}>
+                <span style={{fontSize:9,padding:'2px 6px',borderRadius:8,background:EL_BADGE[p.element]||'#ffffff20',color:C.rose,border:`0.5px solid ${C.border}`}}>{p.element}</span>
+                <span style={{fontSize:9,color:C.textMuted,padding:'2px 5px',borderRadius:6,background:`${C.lavender}40`}}>ruled by {p.ruling}</span>
+                <span style={{fontSize:10,color:C.textMuted,marginLeft:4}}>{openIdx===i?'▾':'▸'}</span>
+              </div>
             </div>
-            <div style={{ fontSize:13.5, color:C.rose, lineHeight:1.85 }}>{p.desc}</div>
+            {openIdx===i&&<div style={{fontSize:11,color:C.rose,lineHeight:1.8,marginTop:10,paddingTop:8,borderTop:`0.5px solid ${C.border}`}}>{p.desc}</div>}
           </Card>
         ))}
       </div>
 
-      <CosmicChat systemPrompt={ASTRO_SYS} placeholder="Ask about your chart, a transit, what a placement means..." />
+      <CosmicChat systemPrompt={ASTRO_SYS} placeholder="Ask about your chart, a transit, synastry, or what a placement means..." />
+    </div>
+  );
+};
+
+const MatrixOfDestinyPanel = () => {
+  const MOD_SYS = `You are an expert in the Matrix of Destiny (Матрица Судьбы), the Russian esoteric numerology system created by Natalia Ladini. Nyla Iman Brown's matrix (born 23.11.2005): Center karma = 1 (The Magician), Sky = 5 (Hierophant), Earth = 5 (Hierophant), Past = 11 (Justice), Future = 7 (Chariot), Portals: E=16 (Tower), F=12 (Hanged Man), G=16 (Tower), H=12 (Hanged Man). Sagittarius Sun, Virgo Moon, Leo Rising. Explain her matrix in depth, interpret arcana, discuss energy lines, karma, talents, and destiny with full detail.`;
+
+  // Birth date: 23.11.2005
+  // A=day=5, B=month=11, C=year=7, D=sum=5, E=A+B=16, F=A+C=12, G=B+D=16, H=C+D=12, K=center=1
+  const ARCANA = {
+    1:{name:'The Magician',  glyph:'Ⅰ', theme:'Manifestation · Will · Mastery', color:'#C4607A'},
+    5:{name:'The Hierophant',glyph:'Ⅴ', theme:'Wisdom · Spiritual Authority · Teaching', color:'#7B5EA7'},
+    7:{name:'The Chariot',   glyph:'Ⅶ', theme:'Victory · Willpower · Direction', color:'#5B8ED6'},
+    11:{name:'Justice',      glyph:'Ⅺ', theme:'Truth · Balance · Cause & Effect', color:'#5BA888'},
+    12:{name:'The Hanged Man',glyph:'Ⅻ',theme:'Surrender · New Perspective · Revelation', color:'#C4904A'},
+    16:{name:'The Tower',    glyph:'ⅩⅥ',theme:'Breakthrough · Liberation · Sudden Change', color:'#D06050'},
+  };
+
+  const MatrixNode = ({n, label, sublabel, size='md', glow}) => {
+    const a = ARCANA[n]||{name:`Arcana ${n}`,glyph:String(n),theme:'',color:C.rose};
+    const sz = size==='lg'?56:size==='md'?44:36;
+    const fs = size==='lg'?20:size==='md'?16:14;
+    return (
+      <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:3}}>
+        <div style={{width:sz,height:sz,borderRadius:'50%',background:`${a.color}25`,border:`1.5px solid ${a.color}70`,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:glow?`0 0 14px ${a.color}50`:undefined}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:fs,color:a.color,fontWeight:700,lineHeight:1}}>{n}</div>
+        </div>
+        {label&&<div style={{fontSize:9,fontWeight:700,color:a.color,textAlign:'center',maxWidth:64,lineHeight:1.2}}>{label}</div>}
+        {sublabel&&<div style={{fontSize:8,color:C.textMuted,textAlign:'center',maxWidth:64,lineHeight:1.2}}>{sublabel}</div>}
+      </div>
+    );
+  };
+
+  const ArcanaCard = ({n, pos, desc}) => {
+    const a = ARCANA[n]||{};
+    return (
+      <Card style={{padding:'11px 13px',background:`${a.color||C.rose}12`,border:`0.5px solid ${a.color||C.rose}35`,marginBottom:7}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:7}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:a.color,fontWeight:700,lineHeight:1,minWidth:26}}>{n}</div>
+          <div>
+            <div style={{fontSize:11.5,fontWeight:700,color:a.color}}>{a.name} · {pos}</div>
+            <div style={{fontSize:9.5,color:C.textMuted,marginTop:1}}>{a.theme}</div>
+          </div>
+        </div>
+        <div style={{fontSize:11,color:a.color,lineHeight:1.78}}>{desc}</div>
+      </Card>
+    );
+  };
+
+  return (
+    <div className="fade-in" style={{maxWidth:640,padding:'0 2px'}}>
+      <PageTitle>Matrix of Destiny</PageTitle>
+      <div style={{fontSize:11,color:C.textMuted,marginBottom:14,lineHeight:1.6}}>The Matrix of Destiny (Матрица Судьбы) is a Russian esoteric system based on Major Arcana numerology derived from your birth date. Each position in the matrix reveals a specific energy — karma, talents, destiny, and the forces shaping your path.</div>
+
+      {/* Visual Matrix Diamond */}
+      <Card style={{background:`linear-gradient(135deg,${C.lavender}40,${C.pink}20)`,padding:'20px 16px',marginBottom:14}}>
+        <div style={{fontSize:9.5,color:C.textMuted,fontWeight:700,letterSpacing:0.8,textTransform:'uppercase',marginBottom:14,textAlign:'center'}}>Nyla Iman Brown · 23 · 11 · 2005</div>
+
+        {/* Row 1: A (Sky) */}
+        <div style={{display:'flex',justifyContent:'center',marginBottom:6}}>
+          <MatrixNode n={5} label="Sky" sublabel="Heaven energy" size="md"/>
+        </div>
+        {/* Row 2: E, F */}
+        <div style={{display:'flex',justifyContent:'center',gap:60,marginBottom:6}}>
+          <MatrixNode n={16} label="Portal E" sublabel="Day + Month" size="sm"/>
+          <MatrixNode n={12} label="Portal F" sublabel="Day + Year" size="sm"/>
+        </div>
+        {/* Row 3: B, K (center), C */}
+        <div style={{display:'flex',justifyContent:'center',alignItems:'center',gap:24,marginBottom:6}}>
+          <MatrixNode n={11} label="Past" sublabel="Left · Month" size="md"/>
+          <MatrixNode n={1}  label="Karma Center" sublabel="Core energy" size="lg" glow={true}/>
+          <MatrixNode n={7}  label="Future" sublabel="Right · Year" size="md"/>
+        </div>
+        {/* Row 4: G, H */}
+        <div style={{display:'flex',justifyContent:'center',gap:60,marginBottom:6}}>
+          <MatrixNode n={16} label="Portal G" sublabel="Month + Sum" size="sm"/>
+          <MatrixNode n={12} label="Portal H" sublabel="Year + Sum" size="sm"/>
+        </div>
+        {/* Row 5: D (Earth) */}
+        <div style={{display:'flex',justifyContent:'center'}}>
+          <MatrixNode n={5} label="Earth" sublabel="Earth energy" size="md"/>
+        </div>
+
+        {/* Diagonal lines as visual decoration */}
+        <div style={{textAlign:'center',marginTop:14,fontSize:10,color:C.textMuted}}>
+          Vertical axis (talent line): <span style={{color:C.rose,fontWeight:600}}>5 · 1 · 5</span> &nbsp;·&nbsp; Horizontal axis (purpose line): <span style={{color:C.rose,fontWeight:600}}>11 · 1 · 7</span>
+        </div>
+      </Card>
+
+      {/* How the numbers were calculated */}
+      <Card style={{padding:'10px 13px',background:`${C.lavender}22`,marginBottom:13}}>
+        <div style={{fontSize:9.5,color:C.textMuted,fontWeight:700,letterSpacing:0.8,textTransform:'uppercase',marginBottom:6}}>Calculation · 23 · 11 · 2005</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,fontSize:10.5,color:C.rose,lineHeight:1.6}}>
+          {[['A · Sky','Day 23 → 2+3 = 5'],['B · Past','Month = 11'],['C · Future','Year 2005 → 2+0+0+5 = 7'],['D · Earth','A+B+C = 5+11+7 = 23 → 5'],['E · Portal','A+B = 5+11 = 16'],['F · Portal','A+C = 5+7 = 12'],['G · Portal','B+D = 11+5 = 16'],['H · Portal','C+D = 7+5 = 12'],['K · Center','A+B+C+D = 28 → 10 → 1']].map(([k,v])=>(
+            <div key={k} style={{background:`${C.pink}30`,borderRadius:6,padding:'3px 8px'}}>
+              <span style={{fontWeight:700}}>{k}</span> · {v}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Arcana interpretations */}
+      <SectionHeading style={{marginBottom:8}}>Matrix Reading — Nyla's Arcana</SectionHeading>
+      <ArcanaCard n={1} pos="Karma Center — your core energy"
+        desc="The Magician at your karma center is one of the most powerful placements in the entire Matrix of Destiny. Arcana 1 represents pure will, resourcefulness, and the ability to manifest reality through focused intention. Your life is fundamentally about learning to direct your enormous personal power with precision and integrity. You came into this life with all the tools you need — every skill, connection, and resource you require will appear when your intention is clear. The Magician does not wait to be given permission. Neither were you meant to."/>
+      <ArcanaCard n={5} pos="Sky & Earth — spiritual and material energy"
+        desc="The Hierophant (Arcana 5) appearing in both your Sky (heaven) and Earth (material world) positions is remarkable — it means your spiritual path and your earthly path are the same path. You are here to be a bridge between higher wisdom and everyday life. The Hierophant governs spiritual authority, teaching, tradition, and access to sacred knowledge. You have a natural gift for receiving and transmitting wisdom — whether through mentorship, writing, creating, or simply living in a way that teaches others. Your abundance in the material world will flow most powerfully when it is aligned with your spiritual truth."/>
+      <ArcanaCard n={11} pos="Past — what you brought with you"
+        desc="Justice (Arcana 11) in your past position shows that you arrived in this lifetime with deep karmic wisdom about truth, fairness, and cause and effect. In previous lives (or earlier in this one), you developed a highly calibrated sense of what is right and wrong — and you carry that as an inner compass. Justice here also means you are completing karmic contracts around truth-telling: learning to speak your truth without fear, to act from integrity even when it costs you, and to trust that the universe keeps precise accounts. What you put out always returns."/>
+      <ArcanaCard n={7} pos="Future — where you are going"
+        desc="The Chariot (Arcana 7) as your future energy is an extraordinary indicator of victory. Your destiny involves mastery, directed achievement, and the triumphant control of opposing forces. The Chariot wins not through brute force but through will, discipline, and the ability to hold multiple energies in intentional alignment — which is precisely what your matrix asks of you. As you move forward in life, your path points toward a position of clear authority and earned success. The Chariot does not stumble onto victory; it is built through accumulated mastery. Every challenge on your path is training your will for the victory that awaits."/>
+      <ArcanaCard n={16} pos="Portal E & G — recurring transformation theme"
+        desc="The Tower (Arcana 16) appearing in both your left diagonal portals is a signature energy in your matrix. This does not mean disaster — it means breakthrough. The Tower represents the sudden collapse of false structures: beliefs, identities, relationships, or systems that were built on an unstable foundation. For you, these moments of sudden disruption are portals of liberation. When things fall apart in your life, they are making room. The Tower energy in your matrix means that your greatest growth comes through disruption rather than gradual evolution — and that you are being called to release the need for false security."/>
+      <ArcanaCard n={12} pos="Portal F & H — recurring surrender theme"
+        desc="The Hanged Man (Arcana 12) appearing in both your right diagonal portals creates a sacred pairing with The Tower. After every breakthrough (Tower), you are invited into surrender (Hanged Man) — a voluntary shift in perspective that allows wisdom to integrate. The Hanged Man sees the world upside down, and what looks like defeat is actually initiation. For you, the moments in life when everything pauses, when nothing makes forward sense, when you must simply wait and receive — these are your most spiritually potent moments. Do not push through them. In the Hanged Man's stillness, your downloads arrive."/>
+
+      <CosmicChat systemPrompt={MOD_SYS} placeholder="Ask about your matrix, an arcana's meaning, your karma, destiny line..." />
     </div>
   );
 };
@@ -2767,8 +3059,9 @@ const CosmicPanel = ({ sub }) => {
       </Card>
     </div>
   );
-  if (sub==='Numerology') return <NumerologyPanel />;
-  if (sub==='Astrology')  return <AstrologyPanel />;
+  if (sub==='Numerology')         return <NumerologyPanel />;
+  if (sub==='Astrology')          return <AstrologyPanel />;
+  if (sub==='Matrix of Destiny')  return <MatrixOfDestinyPanel />;
   return (
     <div className="fade-in" style={{ maxWidth:560 }}>
       <PageTitle>{sub}</PageTitle>
