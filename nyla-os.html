@@ -40,6 +40,16 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
+const useIsMobile = () => {
+  const [v, setV] = useState(() => window.innerWidth < 700);
+  useEffect(() => {
+    const fn = () => setV(window.innerWidth < 700);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return v;
+};
+
 /* ── Data Protection ─────────────────────────────────────────────
    Runs synchronously before React initializes so nothing is lost.
    1. Migrates any legacy keys that were renamed between versions.
@@ -743,6 +753,7 @@ const DayPanel = ({ dateKey, label }) => {
 
 const CalendarPanel = ({ sub }) => {
   const today = new Date();
+  const isMobile = useIsMobile();
   const [viewDate, setViewDate] = useState(today);
   const [events] = useState(()=>JSON.parse(localStorage.getItem('nylaos_events')||'[]')); // read-only for dot indicators
   const [selectedDay, setSelectedDay] = useState(null);
@@ -794,7 +805,8 @@ const CalendarPanel = ({ sub }) => {
       <div className="fade-in" style={{ maxWidth:760 }}>
         <NavBar onPrev={()=>navWeek(-1)} onNext={()=>navWeek(1)}
           label={`Week of ${weekStart.toLocaleDateString('en-US',{month:'long',day:'numeric'})}`} />
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:8 }}>
+        <div style={{ overflowX: isMobile ? 'auto' : 'visible', WebkitOverflowScrolling:'touch', marginRight: isMobile ? -14 : 0 }}>
+        <div style={{ display:'grid', gridTemplateColumns: isMobile ? 'repeat(7,minmax(90px,1fr))' : 'repeat(7,1fr)', gap:8, minWidth: isMobile ? 630 : 'unset' }}>
           {weekDays.map((d,i)=>{
             const isToday = d.toDateString()===today.toDateString();
             const dStr = fmtDateKey(d);
@@ -820,6 +832,7 @@ const CalendarPanel = ({ sub }) => {
               </div>
             );
           })}
+        </div>
         </div>
         {selectedDay && (
           <DayPanel dateKey={selectedDay}
@@ -3990,13 +4003,64 @@ const FloatingChat = () => {
   );
 };
 
+/* ── Mobile Bottom Nav ──────────────────────────────────────────── */
+const MobileBottomNav = ({ activeNav, onNavSelect }) => {
+  const items = NAV.filter(n => n.id !== 'settings').slice(0, 5);
+  return (
+    <div style={{ height:58, background:C.sidebarBg, borderTop:`0.5px solid ${C.border}`,
+      display:'flex', alignItems:'center', justifyContent:'space-around',
+      flexShrink:0, zIndex:30, paddingBottom:'env(safe-area-inset-bottom,0px)' }}>
+      {items.map(item => {
+        const active = activeNav === item.id;
+        return (
+          <button key={item.id} onClick={()=>onNavSelect(item.id)} style={{
+            display:'flex', flexDirection:'column', alignItems:'center', gap:3,
+            background:'none', border:'none', cursor:'pointer', padding:'6px 10px', flex:1,
+          }}>
+            <Ico d={icons[item.id]} size={21} active={active} />
+            <span style={{ fontSize:9.5, color: active ? C.rose : C.textMuted, fontWeight: active ? 600 : 400 }}>{item.label}</span>
+          </button>
+        );
+      })}
+      <button onClick={()=>onNavSelect('settings')} style={{
+        display:'flex', flexDirection:'column', alignItems:'center', gap:3,
+        background:'none', border:'none', cursor:'pointer', padding:'6px 10px', flex:1,
+      }}>
+        <Ico d={icons.settings} size={21} active={activeNav==='settings'} />
+        <span style={{ fontSize:9.5, color: activeNav==='settings' ? C.rose : C.textMuted, fontWeight: activeNav==='settings' ? 600 : 400 }}>Settings</span>
+      </button>
+    </div>
+  );
+};
+
+/* ── Mobile Sub-Nav Tabs ────────────────────────────────────────── */
+const MobileSubTabs = ({ navItem, activeSub, onSubSelect }) => {
+  if (!navItem || !navItem.sub || navItem.sub.length <= 1) return null;
+  return (
+    <div style={{ display:'flex', gap:6, overflowX:'auto', paddingBottom:10, marginBottom:4,
+      scrollbarWidth:'none', WebkitOverflowScrolling:'touch' }}>
+      {navItem.sub.map(s => (
+        <button key={s} onClick={()=>onSubSelect(s)} style={{
+          padding:'6px 14px', borderRadius:20, border:`0.5px solid ${activeSub===s ? C.rose : C.border}`,
+          background: activeSub===s ? C.rose : C.pinkLight, color: activeSub===s ? '#fff' : C.rose,
+          fontSize:12, fontWeight: activeSub===s ? 600 : 400, cursor:'pointer', whiteSpace:'nowrap', flexShrink:0,
+        }}>{s}</button>
+      ))}
+    </div>
+  );
+};
+
 /* ── App ────────────────────────────────────────────────────────── */
 const App = () => {
+  const isMobile = useIsMobile();
   const [activeNav, setActiveNav] = useState('home');
   const [activeSub, setActiveSub] = useState('Overview');
-  const [secCollapsed, setSecCollapsed] = useState(false);
+  const [secCollapsed, setSecCollapsed] = useState(() => window.innerWidth < 700);
   const [bizExtras, setBizExtras] = useState(()=>JSON.parse(localStorage.getItem('nylaos_extra_ventures')||'[]'));
   const [trashedVentures, setTrashedVentures] = useState(()=>JSON.parse(localStorage.getItem('nylaos_trashed_ventures')||'[]'));
+
+  // Auto-collapse secondary sidebar when switching to mobile
+  useEffect(() => { if (isMobile) setSecCollapsed(true); }, [isMobile]);
 
   const addBiz = name => {
     const trimmed = name.trim();
@@ -4040,23 +4104,36 @@ const App = () => {
     setActiveNav(id);
     setActiveSub(NAV.find(n=>n.id===id)?.sub[0]||'');
   };
+
+  const isNotebook = activeNav === 'notebook';
+  const mainPadding = isNotebook ? '0' : isMobile ? '16px 14px 20px' : '28px 32px';
+
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:C.cream }}>
       <TopBar />
       <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
-        <LeftSidebar activeNav={activeNav} onNavSelect={handleNavSelect}
-          secCollapsed={secCollapsed} onToggleSec={()=>setSecCollapsed(c=>!c)} />
-        {activeNav !== 'notebook' && (
+        {!isMobile && (
+          <LeftSidebar activeNav={activeNav} onNavSelect={handleNavSelect}
+            secCollapsed={secCollapsed} onToggleSec={()=>setSecCollapsed(c=>!c)} />
+        )}
+        {!isMobile && !isNotebook && (
           <SecondarySidebar navItem={navItem} activeSub={activeSub} onSubSelect={setActiveSub}
             onAdd={activeNav==='business'?addBiz:null}
             onDelete={activeNav==='business'?deleteBiz:null}
             collapsed={secCollapsed} />
         )}
-        <main style={{ flex:1, overflowY:'auto', padding: activeNav==='notebook' ? '0' : '28px 32px', background:C.cream, overflow: activeNav==='notebook' ? 'hidden' : 'auto' }}>
+        <main style={{ flex:1, overflowY:'auto', padding: mainPadding, background:C.cream,
+          overflow: isNotebook ? 'hidden' : 'auto' }}>
+          {isMobile && !isNotebook && (
+            <MobileSubTabs navItem={navItem} activeSub={activeSub} onSubSelect={setActiveSub} />
+          )}
           <MainContent navId={activeNav} sub={activeSub} onRestoreBiz={restoreBiz} />
         </main>
       </div>
-      <FloatingChat />
+      {isMobile
+        ? <MobileBottomNav activeNav={activeNav} onNavSelect={handleNavSelect} />
+        : <FloatingChat />
+      }
     </div>
   );
 };
