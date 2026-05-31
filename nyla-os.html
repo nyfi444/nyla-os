@@ -2802,11 +2802,24 @@ const SEASON_FOR_NYLA = {
 };
 
 const BirthChartWheel = () => {
-  const CX=150,CY=150,RO=138,RS=105,RP=72,RC=50;
-  const SIGNS=[{g:'♈',e:'fire'},{g:'♉',e:'earth'},{g:'♊',e:'air'},{g:'♋',e:'water'},{g:'♌',e:'fire'},{g:'♍',e:'earth'},{g:'♎',e:'air'},{g:'♏',e:'water'},{g:'♐',e:'fire'},{g:'♑',e:'earth'},{g:'♒',e:'air'},{g:'♓',e:'water'}];
-  const EC={fire:'rgba(220,90,100,0.35)',earth:'rgba(100,170,100,0.35)',air:'rgba(190,170,60,0.35)',water:'rgba(80,110,200,0.35)'};
-  const ET={fire:'#E07080',earth:'#60A870',air:'#B8A030',water:'#5070C0'};
-  const PLANETS=[{g:'☉',s:8},{g:'☽',s:5},{g:'AC',s:4},{g:'☿',s:8},{g:'♀',s:9},{g:'♂',s:1},{g:'♃',s:7},{g:'♄',s:4},{g:'♅',s:11},{g:'♆',s:10},{g:'♇',s:8}];
+  const CX=150,CY=150,RO=138,RS=108,RP=76,RC=52;
+  const SIGNS=[{g:'Ar',e:'fire'},{g:'Ta',e:'earth'},{g:'Ge',e:'air'},{g:'Ca',e:'water'},{g:'Le',e:'fire'},{g:'Vi',e:'earth'},{g:'Li',e:'air'},{g:'Sc',e:'water'},{g:'Sa',e:'fire'},{g:'Cp',e:'earth'},{g:'Aq',e:'air'},{g:'Pi',e:'water'}];
+  const FULL=['Aries','Taurus','Gemini','Cancer','Leo','Virgo','Libra','Scorpio','Sagittarius','Capricorn','Aquarius','Pisces'];
+  const SC={fire:'rgba(160,55,65,0.18)',earth:'rgba(55,110,55,0.18)',air:'rgba(130,110,40,0.18)',water:'rgba(45,75,160,0.18)'};
+  const GC={fire:'rgba(230,160,165,0.65)',earth:'rgba(130,195,130,0.65)',air:'rgba(205,185,105,0.65)',water:'rgba(120,150,230,0.65)'};
+  const PLANETS=[
+    {g:'Su',s:8, c:'rgba(240,220,140,0.9)'},
+    {g:'Mo',s:5, c:'rgba(190,200,235,0.9)'},
+    {g:'AC',s:4, c:'rgba(240,160,180,0.9)'},
+    {g:'Me',s:8, c:'rgba(170,220,235,0.9)'},
+    {g:'Ve',s:9, c:'rgba(235,175,195,0.9)'},
+    {g:'Ma',s:1, c:'rgba(235,130,120,0.9)'},
+    {g:'Ju',s:7, c:'rgba(215,175,120,0.9)'},
+    {g:'Sa',s:4, c:'rgba(175,165,210,0.9)'},
+    {g:'Ur',s:11,c:'rgba(130,215,215,0.9)'},
+    {g:'Ne',s:10,c:'rgba(140,140,215,0.9)'},
+    {g:'Pl',s:8, c:'rgba(185,155,170,0.9)'},
+  ];
   const bySign={};
   PLANETS.forEach(p=>{if(!bySign[p.s])bySign[p.s]=[];bySign[p.s].push(p);});
   const xy=(r,deg)=>{const a=(deg-90)*Math.PI/180;return[CX+r*Math.cos(a),CY+r*Math.sin(a)];};
@@ -2814,22 +2827,31 @@ const BirthChartWheel = () => {
   return (
     <svg width="300" height="300" viewBox="0 0 300 300" style={{maxWidth:'100%',display:'block',margin:'0 auto'}}>
       <defs>
-        <radialGradient id="cg"><stop offset="0%" stopColor="#3a0a50"/><stop offset="100%" stopColor="#0e0020"/></radialGradient>
-        <radialGradient id="bg"><stop offset="0%" stopColor="#1a0530"/><stop offset="100%" stopColor="#08001a"/></radialGradient>
-        <filter id="glow"><feGaussianBlur stdDeviation="1.5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <radialGradient id="wcg"><stop offset="0%" stopColor="#1c0432"/><stop offset="100%" stopColor="#09011a"/></radialGradient>
+        <radialGradient id="wbg"><stop offset="0%" stopColor="#110225"/><stop offset="100%" stopColor="#05000e"/></radialGradient>
       </defs>
-      <circle cx={CX} cy={CY} r={RO+2} fill="url(#bg)"/>
-      {SIGNS.map((sg,i)=><path key={i} d={arc(RO,RS,i*30,i*30+30)} fill={EC[sg.e]} stroke="rgba(255,255,255,0.12)" strokeWidth="0.5"/>)}
-      {SIGNS.map((sg,i)=><path key={'p'+i} d={arc(RS,RP,i*30,i*30+30)} fill={bySign[i]?EC[sg.e].replace('0.35','0.15'):'rgba(255,255,255,0.03)'} stroke="rgba(255,255,255,0.08)" strokeWidth="0.5"/>)}
-      {SIGNS.map((_,i)=>{const[x1,y1]=xy(RP,i*30);const[x2,y2]=xy(RO,i*30);return <line key={'d'+i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,255,255,0.15)" strokeWidth="0.5"/>;} )}
-      {SIGNS.map((sg,i)=>{const[x,y]=xy((RO+RS)/2,i*30+15);return <text key={'s'+i} x={x} y={y} textAnchor="middle" dominantBaseline="central" fontSize="13" fill={ET[sg.e]}>{sg.g}</text>;})}
-      {Object.entries(bySign).map(([si,ps])=>ps.map((p,j)=>{const n=ps.length;const[x,y]=xy((RS+RP)/2,parseInt(si)*30+15+(j-(n-1)/2)*9);const isAC=p.g==='AC';return(<g key={si+'-'+j} filter="url(#glow)"><circle cx={x} cy={y} r={isAC?6.5:5.5} fill="rgba(255,220,80,0.2)" stroke="rgba(255,220,80,0.5)" strokeWidth="0.5"/><text x={x} y={y} textAnchor="middle" dominantBaseline="central" fontSize={isAC?6.5:9} fill="#FFE080" fontWeight="bold">{p.g}</text></g>);}))}
-      <circle cx={CX} cy={CY} r={RP} fill="url(#bg)" stroke="rgba(255,255,255,0.12)" strokeWidth="0.5"/>
-      <circle cx={CX} cy={CY} r={RC} fill="url(#cg)" stroke="rgba(255,255,255,0.18)" strokeWidth="0.5"/>
-      <text x={CX} y={CY-13} textAnchor="middle" fontSize="12" fill="#E8D0F5" fontFamily="'DM Serif Display',serif">Nyla Iman Brown</text>
-      <text x={CX} y={CY+3} textAnchor="middle" fontSize="8.5" fill="#A080C0">♐ Sun · ♍ Moon · ♌ Rising</text>
-      <text x={CX} y={CY+16} textAnchor="middle" fontSize="8" fill="#705090">11·23·2005 · Los Angeles</text>
-      <circle cx={CX} cy={CY} r={RO+1} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1"/>
+      <circle cx={CX} cy={CY} r={RO+3} fill="url(#wbg)"/>
+      {SIGNS.map((sg,i)=><path key={i} d={arc(RO,RS,i*30,i*30+30)} fill={SC[sg.e]} stroke="rgba(255,255,255,0.06)" strokeWidth="0.5"/>)}
+      {SIGNS.map((sg,i)=><path key={'pb'+i} d={arc(RS,RP,i*30,i*30+30)} fill={bySign[i]?SC[sg.e].replace('0.18','0.10'):'rgba(255,255,255,0.015)'} stroke="rgba(255,255,255,0.04)" strokeWidth="0.5"/>)}
+      {SIGNS.map((_,i)=>{const[x1,y1]=xy(RP,i*30);const[x2,y2]=xy(RO,i*30);return <line key={'dl'+i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(255,255,255,0.09)" strokeWidth="0.5"/>;} )}
+      {SIGNS.map((sg,i)=>{const[x,y]=xy((RO+RS)/2,i*30+15);return <text key={'sg'+i} x={x} y={y} textAnchor="middle" dominantBaseline="central" fontSize="9" fill={GC[sg.e]} fontFamily="sans-serif" letterSpacing="0.5">{sg.g}</text>;})}
+      {Object.entries(bySign).map(([si,ps])=>ps.map((p,j)=>{
+        const n=ps.length;
+        const[x,y]=xy((RS+RP)/2,parseInt(si)*30+15+(j-(n-1)/2)*9);
+        const isAC=p.g==='AC';
+        return(
+          <g key={si+'-'+j}>
+            <circle cx={x} cy={y} r={isAC?3.8:3} fill={p.c}/>
+            <text x={x} y={y+7.5} textAnchor="middle" fontSize="6" fill={p.c} fontFamily="sans-serif" letterSpacing="0.2" opacity="0.85">{p.g}</text>
+          </g>
+        );
+      }))}
+      <circle cx={CX} cy={CY} r={RP} fill="url(#wbg)" stroke="rgba(255,255,255,0.06)" strokeWidth="0.5"/>
+      <circle cx={CX} cy={CY} r={RC} fill="url(#wcg)" stroke="rgba(255,255,255,0.1)" strokeWidth="1"/>
+      <text x={CX} y={CY-13} textAnchor="middle" fontSize="11" fill="rgba(215,200,235,0.9)" fontFamily="'DM Serif Display',serif">Nyla Iman Brown</text>
+      <text x={CX} y={CY+2} textAnchor="middle" fontSize="8" fill="rgba(155,130,195,0.7)" fontFamily="sans-serif">Sagittarius · Virgo · Leo</text>
+      <text x={CX} y={CY+15} textAnchor="middle" fontSize="7" fill="rgba(110,85,150,0.6)" fontFamily="sans-serif">11 · 23 · 2005</text>
+      <circle cx={CX} cy={CY} r={RO+1} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="1"/>
     </svg>
   );
 };
@@ -2876,9 +2898,9 @@ const AstrologyPanel = () => {
           <div style={{fontSize:9,color:'#9070C0',fontWeight:700,letterSpacing:0.8,textTransform:'uppercase',marginBottom:8,textAlign:'center'}}>Birth Chart · Natal Wheel</div>
           <BirthChartWheel/>
           <div style={{display:'flex',flexWrap:'wrap',gap:4,marginTop:10,justifyContent:'center'}}>
-            {[['☉','Sun','Sag'],['☽','Moon','Vir'],['AC','Rising','Leo'],['☿','Merc','Sag'],['♀','Venus','Cap'],['♂','Mars','Tau'],['♃','Jup','Sco'],['♄','Sat','Leo'],['♅','Ura','Pis'],['♆','Nep','Aqu'],['♇','Plu','Sag']].map(([g,n,s])=>(
-              <div key={n} style={{fontSize:8.5,color:'#C0A0E0',background:'rgba(255,255,255,0.06)',borderRadius:5,padding:'2px 5px',textAlign:'center'}}>
-                <span style={{color:'#FFE080'}}>{g}</span> {s}
+            {[['Su','Sag'],['Mo','Vir'],['AC','Leo'],['Me','Sag'],['Ve','Cap'],['Ma','Tau'],['Ju','Sco'],['Sa','Leo'],['Ur','Pis'],['Ne','Aqu'],['Pl','Sag']].map(([g,s])=>(
+              <div key={g} style={{fontSize:8.5,color:'rgba(180,155,220,0.75)',background:'rgba(255,255,255,0.05)',borderRadius:5,padding:'2px 6px',textAlign:'center',letterSpacing:'0.2px'}}>
+                <span style={{color:'rgba(210,195,240,0.9)',fontWeight:600}}>{g}</span> {s}
               </div>
             ))}
           </div>
