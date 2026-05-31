@@ -40,6 +40,42 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
+/* ── Data Protection ─────────────────────────────────────────────
+   Runs synchronously before React initializes so nothing is lost.
+   1. Migrates any legacy keys that were renamed between versions.
+   2. Takes an auto-snapshot of all current nylaos_ data so there
+      is always a "last session" restore point even after a code update.
+──────────────────────────────────────────────────────────────────── */
+(function protectData() {
+  // Key migrations: [oldKey, newKey]
+  const migrations = [
+    ['cycleStartDate', 'nylaos_cycleStartDate'],
+  ];
+  migrations.forEach(([oldK, newK]) => {
+    const v = localStorage.getItem(oldK);
+    if (v !== null && localStorage.getItem(newK) === null) {
+      localStorage.setItem(newK, v);
+    }
+  });
+
+  // Auto-snapshot: copy every nylaos_ value before new code runs
+  try {
+    const snap = {};
+    let hasData = false;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('nylaos_') && k !== 'nylaos_auto_bak') {
+        snap[k] = localStorage.getItem(k);
+        hasData = true;
+      }
+    }
+    if (hasData) {
+      snap.__savedAt = new Date().toISOString();
+      localStorage.setItem('nylaos_auto_bak', JSON.stringify(snap));
+    }
+  } catch(e) {}
+})();
+
 /* ── Theme ──────────────────────────────────────────────────────── */
 const ACCENT_PALETTES = {
   pink:   { rose:'#c4607a', roseDark:'#a03c5a', pink:'#f2c4ce', pinkLight:'#fef0f5', accent:'#9080d8', lavender:'#d4c0f0', border:'#f0d0dc', gradA:'linear-gradient(135deg,#f2c4ce,#d4c0f0)' },
@@ -129,7 +165,7 @@ const getMoonForDate = date => {
 };
 
 const getCycleForDate = date => {
-  const startStr = localStorage.getItem('cycleStartDate');
+  const startStr = localStorage.getItem('nylaos_cycleStartDate');
   if (!startStr) return null;
   const start = new Date(startStr); start.setHours(0,0,0,0);
   const d = new Date(date); d.setHours(0,0,0,0);
@@ -488,7 +524,6 @@ const HomeOverview = () => {
         {!editAffirms ? (
           <>
             <div style={{ fontSize:14.5, color:C.roseDark, fontStyle:'italic', lineHeight:1.8, fontFamily:"'DM Serif Display',serif" }}>"{todayAffirm}"</div>
-            {moon && <div style={{ marginTop:12, fontSize:12, color:C.textLight }}>{moon.emoji} {moon.label}</div>}
           </>
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -1664,9 +1699,9 @@ const CycleWheel = ({ cycleDay }) => {
 };
 
 const PeriodOverview = () => {
-  const [startDate, setStartDate] = useState(()=>localStorage.getItem('cycleStartDate')||'');
+  const [startDate, setStartDate] = useState(()=>localStorage.getItem('nylaos_cycleStartDate')||'');
   const cycle = startDate ? getCycleForDate(new Date()) : null;
-  const save = v => { setStartDate(v); localStorage.setItem('cycleStartDate',v); };
+  const save = v => { setStartDate(v); localStorage.setItem('nylaos_cycleStartDate',v); };
   const nextPeriod = () => {
     if (!startDate) return null;
     const start = new Date(startDate);
@@ -3646,7 +3681,8 @@ const BackupPanel = () => {
     const data = {};
     for(let i=0; i<localStorage.length; i++){
       const k = localStorage.key(i);
-      if(k && k.startsWith('nylaos_')) data[k] = localStorage.getItem(k);
+      // Exclude the auto-backup key itself — it would just be nested redundant data
+      if(k && k.startsWith('nylaos_') && k !== 'nylaos_auto_bak') data[k] = localStorage.getItem(k);
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
     const url = URL.createObjectURL(blob);
@@ -3657,16 +3693,23 @@ const BackupPanel = () => {
     URL.revokeObjectURL(url);
   };
 
+  const restoreFromData = (data) => {
+    let count = 0;
+    Object.entries(data).forEach(([k,v]) => {
+      if(k.startsWith('nylaos_') && k !== '__savedAt' && k !== 'nylaos_auto_bak'){
+        localStorage.setItem(k, v); count++;
+      }
+    });
+    return count;
+  };
+
   const importData = (file) => {
     if(!file) return;
     const reader = new FileReader();
     reader.onload = e => {
       try {
         const data = JSON.parse(e.target.result);
-        let count = 0;
-        Object.entries(data).forEach(([k,v]) => {
-          if(k.startsWith('nylaos_')){ localStorage.setItem(k,v); count++; }
-        });
+        const count = restoreFromData(data);
         setRestoreMsg(`✓ Restored ${count} items. Reload the page to see your data.`);
       } catch(err) {
         setRestoreMsg("⚠ Could not read backup file — make sure it's a valid Nyla OS backup.");
@@ -3675,11 +3718,55 @@ const BackupPanel = () => {
     reader.readAsText(file);
   };
 
-  const keyCount = Array.from({length:localStorage.length},(_,i)=>localStorage.key(i)).filter(k=>k&&k.startsWith('nylaos_')).length;
+  const restoreAutoBackup = () => {
+    try {
+      const raw = localStorage.getItem('nylaos_auto_bak');
+      if (!raw) { setRestoreMsg("⚠ No auto-backup found."); return; }
+      const data = JSON.parse(raw);
+      const count = restoreFromData(data);
+      setRestoreMsg(`✓ Restored ${count} items from last session backup. Reload to see your data.`);
+    } catch {
+      setRestoreMsg("⚠ Auto-backup could not be read.");
+    }
+  };
+
+  const autoBackup = (() => {
+    try { return JSON.parse(localStorage.getItem('nylaos_auto_bak') || 'null'); } catch { return null; }
+  })();
+  const autoBackupDate = autoBackup?.__savedAt
+    ? new Date(autoBackup.__savedAt).toLocaleString()
+    : null;
+
+  const keyCount = Array.from({length:localStorage.length},(_,i)=>localStorage.key(i))
+    .filter(k=>k&&k.startsWith('nylaos_')&&k!=='nylaos_auto_bak').length;
+
+  const msgStyle = ok => ({ marginTop:12, fontSize:13,
+    color: ok ? '#4CAF77' : '#E07050', padding:'10px 14px', borderRadius:10,
+    background: ok ? '#4CAF7715' : '#E0705015',
+    border:`0.5px solid ${ok?'#4CAF77':'#E07050'}` });
 
   return (
     <div className="fade-in" style={{ maxWidth:500 }}>
       <PageTitle>Backup & Restore</PageTitle>
+
+      {/* Auto-backup status */}
+      {autoBackupDate && (
+        <Card style={{ marginBottom:14, background: C.lavLight }}>
+          <SectionHeading>Auto-Backup</SectionHeading>
+          <div style={{ fontSize:13, color:C.textLight, lineHeight:1.7, marginBottom:12 }}>
+            Nyla OS automatically snapshots your data every time the page loads, so a code update can never erase your information. Your last snapshot was saved on <strong>{autoBackupDate}</strong>.
+          </div>
+          <button onClick={restoreAutoBackup}
+            style={{ padding:'8px 18px', borderRadius:10, background:'transparent', color:C.accent,
+              border:`1.5px solid ${C.accent}`, fontSize:13, cursor:'pointer', fontFamily:'inherit', fontWeight:500 }}>
+            ↩ Restore from last session
+          </button>
+          {restoreMsg && restoreMsg.includes('session') && (
+            <div style={msgStyle(restoreMsg.startsWith('✓'))}>{restoreMsg}</div>
+          )}
+        </Card>
+      )}
+
       <Card style={{ marginBottom:14 }}>
         <SectionHeading>Export Your Data</SectionHeading>
         <div style={{ fontSize:13, color:C.textLight, lineHeight:1.7, marginBottom:14 }}>
@@ -3693,6 +3780,7 @@ const BackupPanel = () => {
           ⬇ Download Backup
         </button>
       </Card>
+
       <Card>
         <SectionHeading>Restore From Backup</SectionHeading>
         <div style={{ fontSize:13, color:C.textLight, lineHeight:1.7, marginBottom:14 }}>
@@ -3704,12 +3792,8 @@ const BackupPanel = () => {
           style={{ padding:'10px 22px', borderRadius:10, background:'transparent', color:C.rose, border:`1.5px solid ${C.rose}`, fontSize:13.5, cursor:'pointer', fontFamily:'inherit', fontWeight:500 }}>
           ⬆ Restore From File
         </button>
-        {restoreMsg && (
-          <div style={{ marginTop:12, fontSize:13, color: restoreMsg.startsWith('✓') ? '#4CAF77' : '#E07050',
-            padding:'10px 14px', borderRadius:10, background: restoreMsg.startsWith('✓') ? '#4CAF7715' : '#E0705015',
-            border:`0.5px solid ${restoreMsg.startsWith('✓')?'#4CAF77':'#E07050'}` }}>
-            {restoreMsg}
-          </div>
+        {restoreMsg && !restoreMsg.includes('session') && (
+          <div style={msgStyle(restoreMsg.startsWith('✓'))}>{restoreMsg}</div>
         )}
       </Card>
     </div>
