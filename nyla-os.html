@@ -2448,6 +2448,111 @@ const DefaultBizContent = ({ sub }) => {
   );
 };
 
+const BusinessPlanEditor = ({ storageKey, title }) => {
+  const KEY = `nylaos_note_${storageKey}`;
+  const [content, setContent] = useState(()=>localStorage.getItem(KEY)||'');
+  const [fmt, setFmt] = useState({bold:false,italic:false,underline:false,strike:false});
+  const editorRef = useRef(null);
+
+  useEffect(()=>{
+    const onSel = ()=>{ try { setFmt({bold:document.queryCommandState('bold'),italic:document.queryCommandState('italic'),underline:document.queryCommandState('underline'),strike:document.queryCommandState('strikeThrough')}); } catch(e){} };
+    document.addEventListener('selectionchange', onSel);
+    return ()=>document.removeEventListener('selectionchange', onSel);
+  },[]);
+
+  const saveContent = html => { setContent(html); localStorage.setItem(KEY, html); };
+
+  const exec = (cmd, val=null) => {
+    document.execCommand(cmd, false, val);
+    if(editorRef.current){ editorRef.current.focus(); saveContent(editorRef.current.innerHTML); }
+  };
+
+  const exportPDF = () => {
+    const dateStr = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+    const w = window.open('','_blank');
+    w.document.write(`<!DOCTYPE html><html><head><title>${title||'Business Plan'}</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:26px;color:#c4607a;}h2{font-size:20px;color:#a03c5a;}h3{font-size:16px;color:#c4607a;}</style></head><body><h1>${title||'Business Plan'}</h1><p style="font-size:11px;color:#aaa;">${dateStr}</p><hr style="border:none;border-top:1px solid #eee;margin:16px 0;"><div style="line-height:2;">${content||''}</div></body></html>`);
+    w.document.close(); w.print();
+  };
+
+  const wc = content.replace(/<[^>]+>/g,' ').split(/\s+/).filter(Boolean).length;
+  const panelBg = '#faf4f8';
+
+  const TBtn = ({cmd,val=null,label,title:t,active,style:s={}}) => (
+    <button onMouseDown={e=>{e.preventDefault();exec(cmd,val);}} title={t||label}
+      style={{padding:'3px 8px',borderRadius:6,border:'none',cursor:'pointer',fontSize:12.5,lineHeight:1.5,background:active?C.rose:'transparent',color:active?'#fff':C.text,fontWeight:cmd==='bold'?700:400,fontStyle:cmd==='italic'?'italic':'normal',...s}}
+      onMouseEnter={e=>{if(!active)e.currentTarget.style.background=`${C.pink}70`;}}
+      onMouseLeave={e=>{if(!active)e.currentTarget.style.background='transparent';}}>{label}</button>
+  );
+  const TBtnBlock = ({tag,label}) => (
+    <button onMouseDown={e=>{e.preventDefault();exec('formatBlock',tag);}} title={`Format as ${tag}`}
+      style={{padding:'3px 8px',borderRadius:6,border:'none',cursor:'pointer',fontSize:11.5,background:'transparent',color:C.text,fontWeight:600}}
+      onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>{label}</button>
+  );
+  const Sep = () => <div style={{width:1,height:18,background:C.border,flexShrink:0,margin:'0 2px'}}/>;
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',height:'calc(100vh - 180px)',borderTop:`0.5px solid ${C.border}`,borderRadius:12,overflow:'hidden',border:`0.5px solid ${C.border}`}}>
+      {/* Title + export bar */}
+      <div style={{padding:'9px 18px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:12,flexShrink:0,background:panelBg}}>
+        <div style={{flex:1,fontSize:14,fontWeight:600,color:C.rose,fontFamily:"'DM Serif Display',serif"}}>{title||'Business Plan'}</div>
+        <span style={{fontSize:10.5,color:C.textMuted}}>{wc} words</span>
+        <button onClick={exportPDF} style={{padding:'4px 12px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0}}>Export PDF</button>
+      </div>
+      {/* Formatting toolbar */}
+      <div style={{padding:'5px 10px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:2,flexWrap:'wrap',background:panelBg,flexShrink:0}}>
+        <TBtn cmd="undo" label="↩" title="Undo"/>
+        <TBtn cmd="redo" label="↪" title="Redo"/>
+        <Sep/>
+        <TBtnBlock tag="h1" label="H1"/>
+        <TBtnBlock tag="h2" label="H2"/>
+        <TBtnBlock tag="h3" label="H3"/>
+        <TBtnBlock tag="p" label="¶"/>
+        <Sep/>
+        <TBtn cmd="bold" label="B" title="Bold" active={fmt.bold} style={{fontWeight:700}}/>
+        <TBtn cmd="italic" label="I" title="Italic" active={fmt.italic} style={{fontStyle:'italic'}}/>
+        <TBtn cmd="underline" label="U" title="Underline" active={fmt.underline} style={{textDecoration:'underline'}}/>
+        <TBtn cmd="strikeThrough" label="S" title="Strikethrough" active={fmt.strike} style={{textDecoration:'line-through'}}/>
+        <Sep/>
+        <select onChange={e=>exec('fontName',e.target.value)} defaultValue="DM Sans"
+          style={{padding:'3px 6px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:11,cursor:'pointer',maxWidth:88}}>
+          <option value="DM Sans">DM Sans</option>
+          <option value="DM Serif Display">Serif</option>
+          <option value="Georgia">Georgia</option>
+          <option value="Courier New">Mono</option>
+          <option value="Arial">Arial</option>
+        </select>
+        <select onChange={e=>exec('fontSize',e.target.value)} defaultValue="3"
+          style={{padding:'3px 5px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:11,cursor:'pointer',width:50}}>
+          <option value="1">XS</option><option value="2">S</option><option value="3">M</option>
+          <option value="4">L</option><option value="5">XL</option><option value="6">2X</option><option value="7">3X</option>
+        </select>
+        <Sep/>
+        <label title="Text color" style={{display:'flex',alignItems:'center',gap:2,cursor:'pointer',fontSize:11,color:C.textMuted}}>
+          A<input type="color" defaultValue="#401828" onChange={e=>exec('foreColor',e.target.value)} style={{width:20,height:20,borderRadius:4,border:`0.5px solid ${C.border}`,cursor:'pointer',padding:1}}/>
+        </label>
+        <label title="Highlight" style={{display:'flex',alignItems:'center',gap:2,cursor:'pointer',fontSize:11,color:C.textMuted}}>
+          ▌<input type="color" defaultValue="#f2c4ce" onChange={e=>exec('hiliteColor',e.target.value)} style={{width:20,height:20,borderRadius:4,border:`0.5px solid ${C.border}`,cursor:'pointer',padding:1}}/>
+        </label>
+        <Sep/>
+        <button onMouseDown={e=>{e.preventDefault();exec('insertUnorderedList');}} title="Bullets" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.text,fontSize:14}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>•</button>
+        <button onMouseDown={e=>{e.preventDefault();exec('insertOrderedList');}} title="Numbered" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.text,fontSize:12}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>1.</button>
+        <Sep/>
+        <button onMouseDown={e=>{e.preventDefault();exec('justifyLeft');}} title="Left" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.text,fontSize:12}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>≡</button>
+        <button onMouseDown={e=>{e.preventDefault();exec('justifyCenter');}} title="Center" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.text,fontSize:12}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>⊟</button>
+        <button onMouseDown={e=>{e.preventDefault();exec('justifyRight');}} title="Right" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.text,fontSize:12}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>⇥</button>
+        <Sep/>
+        <button onMouseDown={e=>{e.preventDefault();exec('formatBlock','blockquote');}} title="Blockquote" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.textMuted,fontSize:13,fontStyle:'italic'}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>❝</button>
+        <button onMouseDown={e=>{e.preventDefault();exec('insertHorizontalRule');}} title="Divider" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.textMuted,fontSize:12}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>—</button>
+      </div>
+      {/* Editor */}
+      <div style={{flex:1,overflowY:'auto',background:C.cream}}>
+        <RichEditorComponent key={storageKey} pageId={storageKey} initialContent={content}
+          onUpdate={saveContent} onMount={el=>editorRef.current=el}/>
+      </div>
+    </div>
+  );
+};
+
 const BusinessPanel = ({ sub }) => {
   const [tab, setTab] = useState('Overview');
   useEffect(()=>setTab('Overview'),[sub]);
@@ -2463,7 +2568,7 @@ const BusinessPanel = ({ sub }) => {
       </div>
       {tab==='Overview'      && <VentureOverview venture={sub} />}
       {tab==='Financials'    && <FinanceTracker namespace={ns} />}
-      {tab==='Business Plan' && <SimpleEditor sub={`biz_plan_${ns}`} />}
+      {tab==='Business Plan' && <BusinessPlanEditor storageKey={`biz_plan_${ns}`} title={`${sub} — Business Plan`} />}
       {tab==='Tasks'         && <TasksPanel sub="Today's Tasks" storageKey={`nylaos_tasks_${ns}`} />}
       {tab==='Brand'         && <BrandPanel venture={sub} />}
       {tab==='Goals'         && <GoalsPanel sub="All Goals" />}
