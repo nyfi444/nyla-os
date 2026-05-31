@@ -685,6 +685,17 @@ const DayPanel = ({ dateKey, label }) => {
   const [newText, setNewText] = useState('');
   const [newTime, setNewTime] = useState('');
 
+  // Tasks from Tasks panel that are due on this day
+  const [linkedTasks, setLinkedTasks] = useState(()=>
+    JSON.parse(localStorage.getItem('nylaos_tasks')||'[]').filter(t=>t.calendarDate===dateKey)
+  );
+  const toggleLinkedTask = id => {
+    const all = JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
+    const updated = all.map(t=>t.id===id?{...t,done:!t.done}:t);
+    localStorage.setItem('nylaos_tasks', JSON.stringify(updated));
+    setLinkedTasks(updated.filter(t=>t.calendarDate===dateKey));
+  };
+
   const saveAll = items => { setAllItems(items); localStorage.setItem(DI_KEY, JSON.stringify(items)); };
   const dayItems = allItems.filter(i=>i.dateKey===dateKey);
   const sorted = [...dayItems].sort((a,b)=>{
@@ -739,6 +750,20 @@ const DayPanel = ({ dateKey, label }) => {
           </div>
         ))}
       </div>
+      {linkedTasks.length > 0 && (
+        <div style={{ marginBottom:10, paddingBottom:10, borderBottom:`0.5px solid ${C.border}` }}>
+          <div style={{ fontSize:11, color:C.textMuted, fontWeight:500, marginBottom:6 }}>FROM TASKS · {linkedTasks.filter(t=>t.done).length}/{linkedTasks.length} done</div>
+          {linkedTasks.map(t=>(
+            <div key={t.id} onClick={()=>toggleLinkedTask(t.id)}
+              style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 0', cursor:'pointer' }}>
+              <div style={{ width:16, height:16, borderRadius:5, flexShrink:0, border:`1.5px solid ${t.done?C.rose:C.accent}`, background:t.done?C.rose:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                {t.done && <Ico d={icons.check} size={10} stroke="#fff" />}
+              </div>
+              <span style={{ fontSize:13, color:t.done?C.textMuted:C.text, textDecoration:t.done?'line-through':'none' }}>{t.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display:'flex', gap:6, paddingTop:8, borderTop:`0.5px solid ${C.border}` }}>
         <input value={newText} onChange={e=>setNewText(e.target.value)}
           onKeyDown={e=>e.key==='Enter'&&addItem()} placeholder="Add item..."
@@ -848,6 +873,7 @@ const CalendarPanel = ({ sub }) => {
     const dim = new Date(y,m+1,0).getDate();
     const cells = [...Array(firstDay).fill(null), ...Array.from({length:dim},(_,i)=>i+1)];
     const selDStr = selectedDay ? `${y}-${String(m+1).padStart(2,'0')}-${String(selectedDay).padStart(2,'0')}` : null;
+    const allTasksForMonth = JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
     return (
       <div className="fade-in" style={{ maxWidth:560 }}>
         <NavBar onPrev={()=>navMonth(-1)} onNext={()=>navMonth(1)} label={`${MONTHS[m]} ${y}`} />
@@ -860,7 +886,11 @@ const CalendarPanel = ({ sub }) => {
               const isToday = day&&day===today.getDate()&&m===today.getMonth()&&y===today.getFullYear();
               const isSelected = day===selectedDay;
               const dStr = day?`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`:null;
-              const evts = dStr ? events.filter(e=>e.date===dStr) : [];
+              // Include both calendar events AND tasks due on this day
+              const evts = dStr ? [
+                ...events.filter(e=>e.date===dStr),
+                ...allTasksForMonth.filter(t=>t.calendarDate===dStr && !t.done)
+              ] : [];
               return (
                 <DayCell key={i} day={day} date={day?new Date(y,m,day):null}
                   events={evts} isToday={isToday} isSelected={isSelected}
@@ -2843,9 +2873,26 @@ const GoalsPanel = ({ sub }) => {
     );
   };
 
+  const [allTasks, setAllTasks] = useState(()=>JSON.parse(localStorage.getItem('nylaos_tasks')||'[]'));
+  const toggleGoalTask = (taskId) => {
+    const updated = allTasks.map(t=>t.id===taskId?{...t,done:!t.done}:t);
+    setAllTasks(updated);
+    localStorage.setItem('nylaos_tasks', JSON.stringify(updated));
+    // Auto-update goal progress based on linked task completion
+    const linkedForGoal = (gid) => updated.filter(t=>t.goalId===gid);
+    goals.forEach(g => {
+      const linked = linkedForGoal(g.id);
+      if (linked.length > 0) {
+        const prog = Math.round(linked.filter(t=>t.done).length / linked.length * 100);
+        save(goals.map(x=>x.id===g.id?{...x,progress:prog}:x));
+      }
+    });
+  };
+
   const renderGoalCard = g => {
     const daysLeft = g.targetDate ? Math.ceil((new Date(g.targetDate+'T23:59:59')-new Date())/86400000) : null;
     const catColor = GOAL_CAT_COLORS[g.category]||C.pink;
+    const linkedTasks = allTasks.filter(t=>t.goalId===g.id);
     return (
       <Card key={g.id} style={{ padding:'16px 18px', marginBottom:8 }}>
         <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
@@ -2867,6 +2914,22 @@ const GoalsPanel = ({ sub }) => {
               <input type="range" min={0} max={100} value={g.progress} onChange={e=>updateProgress(g.id,parseInt(e.target.value))} style={{ width:'100%', marginTop:4, accentColor:C.rose }}/>
             </div>
             {daysLeft!==null && <div style={{ fontSize:11, color:daysLeft<0?C.rose:daysLeft<=7?'#e87e3e':C.textMuted }}>📅 {daysLeft<0?`${Math.abs(daysLeft)}d overdue`:daysLeft===0?'Due today':`${daysLeft} days left`}</div>}
+            {linkedTasks.length > 0 && (
+              <div style={{ marginTop:12, paddingTop:10, borderTop:`0.5px solid ${C.border}` }}>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:6, fontWeight:500 }}>
+                  LINKED TASKS · {linkedTasks.filter(t=>t.done).length}/{linkedTasks.length} done
+                </div>
+                {linkedTasks.map(t=>(
+                  <div key={t.id} onClick={()=>toggleGoalTask(t.id)} style={{ display:'flex', alignItems:'center', gap:8, padding:'4px 0', cursor:'pointer' }}>
+                    <div style={{ width:14, height:14, borderRadius:4, flexShrink:0, border:`1.5px solid ${t.done?C.rose:C.accent}`, background:t.done?C.rose:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                      {t.done && <Ico d={icons.check} size={9} stroke="#fff" />}
+                    </div>
+                    <span style={{ fontSize:12.5, color:t.done?C.textMuted:C.text, textDecoration:t.done?'line-through':'none', lineHeight:1.4 }}>{t.text}</span>
+                    {t.calendarDate && <span style={{ fontSize:10, color:C.textMuted, marginLeft:'auto', flexShrink:0 }}>📅 {t.calendarDate}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div style={{ display:'flex', gap:5, flexShrink:0 }}>
             <button onClick={()=>startEdit(g)} style={{ padding:'4px 10px', borderRadius:7, background:`${C.accent}20`, border:`0.5px solid ${C.border}`, color:C.text, fontSize:11.5, cursor:'pointer' }}>Edit</button>
@@ -4003,33 +4066,72 @@ const FloatingChat = () => {
   );
 };
 
+/* ── Mobile More Menu ───────────────────────────────────────────── */
+const PRIMARY_NAV = ['home','calendar','tasks','goals'];
+const MobileMoreMenu = ({ activeNav, onNavSelect, onClose }) => {
+  const extras = NAV.filter(n => !PRIMARY_NAV.includes(n.id));
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:200, background:'rgba(0,0,0,0.35)' }} onClick={onClose}>
+      <div style={{ position:'absolute', bottom:58, left:0, right:0, background:C.cream,
+        borderRadius:'22px 22px 0 0', padding:'16px 16px 24px', boxShadow:'0 -6px 30px rgba(0,0,0,0.15)' }}
+        onClick={e=>e.stopPropagation()}>
+        <div style={{ width:38, height:4, borderRadius:2, background:C.border, margin:'0 auto 16px' }} />
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
+          {extras.map(item => {
+            const active = activeNav===item.id;
+            return (
+              <button key={item.id} onClick={()=>{ onNavSelect(item.id); onClose(); }} style={{
+                display:'flex', flexDirection:'column', alignItems:'center', gap:6,
+                background: active ? C.pink : C.pinkLight,
+                border:`0.5px solid ${active ? C.rose : C.border}`,
+                borderRadius:14, padding:'14px 8px', cursor:'pointer',
+              }}>
+                <Ico d={icons[item.id]} size={22} active={active} />
+                <span style={{ fontSize:10.5, color: active ? C.rose : C.textLight, fontWeight: active?600:400, textAlign:'center' }}>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ── Mobile Bottom Nav ──────────────────────────────────────────── */
 const MobileBottomNav = ({ activeNav, onNavSelect }) => {
-  const items = NAV.filter(n => n.id !== 'settings').slice(0, 5);
-  return (
-    <div style={{ height:58, background:C.sidebarBg, borderTop:`0.5px solid ${C.border}`,
-      display:'flex', alignItems:'center', justifyContent:'space-around',
-      flexShrink:0, zIndex:30, paddingBottom:'env(safe-area-inset-bottom,0px)' }}>
-      {items.map(item => {
-        const active = activeNav === item.id;
-        return (
-          <button key={item.id} onClick={()=>onNavSelect(item.id)} style={{
-            display:'flex', flexDirection:'column', alignItems:'center', gap:3,
-            background:'none', border:'none', cursor:'pointer', padding:'6px 10px', flex:1,
-          }}>
-            <Ico d={icons[item.id]} size={21} active={active} />
-            <span style={{ fontSize:9.5, color: active ? C.rose : C.textMuted, fontWeight: active ? 600 : 400 }}>{item.label}</span>
-          </button>
-        );
-      })}
-      <button onClick={()=>onNavSelect('settings')} style={{
+  const [showMore, setShowMore] = useState(false);
+  const isInMore = !PRIMARY_NAV.includes(activeNav);
+  const navBtn = (id, label, icon) => {
+    const active = activeNav===id;
+    return (
+      <button key={id} onClick={()=>{ onNavSelect(id); setShowMore(false); }} style={{
         display:'flex', flexDirection:'column', alignItems:'center', gap:3,
         background:'none', border:'none', cursor:'pointer', padding:'6px 10px', flex:1,
       }}>
-        <Ico d={icons.settings} size={21} active={activeNav==='settings'} />
-        <span style={{ fontSize:9.5, color: activeNav==='settings' ? C.rose : C.textMuted, fontWeight: activeNav==='settings' ? 600 : 400 }}>Settings</span>
+        <Ico d={icons[icon||id]} size={21} active={active} />
+        <span style={{ fontSize:9.5, color: active ? C.rose : C.textMuted, fontWeight: active?600:400 }}>{label}</span>
       </button>
-    </div>
+    );
+  };
+  const activeMoreItem = isInMore ? NAV.find(n=>n.id===activeNav) : null;
+  return (
+    <>
+      {showMore && <MobileMoreMenu activeNav={activeNav} onNavSelect={onNavSelect} onClose={()=>setShowMore(false)} />}
+      <div style={{ height:58, background:C.sidebarBg, borderTop:`0.5px solid ${C.border}`,
+        display:'flex', alignItems:'center', justifyContent:'space-around',
+        flexShrink:0, zIndex:30, paddingBottom:'env(safe-area-inset-bottom,0px)' }}>
+        {PRIMARY_NAV.map(id => navBtn(id, NAV.find(n=>n.id===id)?.label, id))}
+        <button onClick={()=>setShowMore(s=>!s)} style={{
+          display:'flex', flexDirection:'column', alignItems:'center', gap:3,
+          background:'none', border:'none', cursor:'pointer', padding:'6px 10px', flex:1,
+        }}>
+          <Ico d={icons[activeMoreItem?.id||'settings']} size={21} active={showMore||isInMore} />
+          <span style={{ fontSize:9.5, color: showMore||isInMore ? C.rose : C.textMuted, fontWeight: showMore||isInMore?600:400 }}>
+            {activeMoreItem ? activeMoreItem.label : 'More'}
+          </span>
+        </button>
+      </div>
+    </>
   );
 };
 
