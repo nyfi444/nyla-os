@@ -9,6 +9,10 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Firebase (cross-device sync) -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body, #root { height: 100%; }
@@ -39,6 +43,105 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
+
+/* ── Firebase Cross-Device Sync ──────────────────────────────────────
+   Fill in FB_CONFIG with your Firebase project details to enable sync.
+   Steps: console.firebase.google.com → New project → Add web app →
+   Copy config below. Then enable Firestore + Google Sign-In in Firebase.
+──────────────────────────────────────────────────────────────────── */
+const FB_CONFIG = {
+  apiKey:            "",   // ← paste your config here
+  authDomain:        "",
+  projectId:         "",
+  storageBucket:     "",
+  messagingSenderId: "",
+  appId:             ""
+};
+
+// Raw localStorage.setItem (before our interception, used internally)
+const _rawLS = localStorage.setItem.bind(localStorage);
+let _fbAuth=null, _fbDb=null, _fbUser=null, _syncTimer=null;
+const _syncSubs=new Set();
+let _syncState={status:'idle',user:null};
+const _setSyncState=s=>{_syncState=s;_syncSubs.forEach(fn=>fn(s));};
+
+const useSyncStatus=()=>{
+  const [s,setS]=React.useState(_syncState);
+  React.useEffect(()=>{_syncSubs.add(setS);return()=>_syncSubs.delete(setS);},[]);
+  return s;
+};
+
+async function _cloudLoad(){
+  if(!_fbUser||!_fbDb) return;
+  _setSyncState({status:'syncing',user:_fbUser});
+  try{
+    const doc=await _fbDb.collection('nylaos').doc(_fbUser.uid).get();
+    if(doc.exists){
+      const {snapshot,savedAt}=doc.data();
+      const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
+      if(savedAt>localTs&&snapshot){
+        const data=JSON.parse(snapshot);
+        Object.entries(data).forEach(([k,v])=>{
+          if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
+        });
+        _rawLS('nylaos_cloud_ts',String(savedAt));
+        _setSyncState({status:'synced',user:_fbUser});
+        window.location.reload(); return;
+      }
+    }
+    _setSyncState({status:'synced',user:_fbUser});
+  }catch(e){console.warn('Cloud load:',e);_setSyncState({status:'error',user:_fbUser});}
+}
+
+async function cloudSave(){
+  if(!_fbUser||!_fbDb) return;
+  _setSyncState({status:'syncing',user:_fbUser});
+  try{
+    const snap={};
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);
+      if(k&&k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') snap[k]=localStorage.getItem(k);
+    }
+    const savedAt=Date.now();
+    await _fbDb.collection('nylaos').doc(_fbUser.uid).set({
+      snapshot:JSON.stringify(snap),savedAt,email:_fbUser.email||''
+    });
+    _rawLS('nylaos_cloud_ts',String(savedAt));
+    _setSyncState({status:'synced',user:_fbUser});
+  }catch(e){console.warn('Cloud save:',e);_setSyncState({status:'error',user:_fbUser});}
+}
+
+// Intercept all localStorage writes → auto-sync 2.5s after last change
+localStorage.setItem=function(key,value){
+  _rawLS(key,value);
+  if(key&&key.startsWith('nylaos_')&&key!=='nylaos_cloud_ts'&&_fbUser){
+    if(_syncTimer) clearTimeout(_syncTimer);
+    _syncTimer=setTimeout(cloudSave,2500);
+  }
+};
+
+async function signInWithGoogle(){
+  if(!_fbAuth){alert('Firebase config not filled in yet — see code comments.');return;}
+  try{await _fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider());}
+  catch(e){if(e.code!=='auth/popup-closed-by-user')alert('Sign-in failed: '+e.message);}
+}
+async function fbSignOut(){if(_fbAuth)await _fbAuth.signOut();}
+
+// Boot Firebase if config is provided
+(function(){
+  if(!FB_CONFIG.apiKey||typeof firebase==='undefined') return;
+  try{
+    firebase.initializeApp(FB_CONFIG);
+    _fbAuth=firebase.auth();
+    _fbDb=firebase.firestore();
+    _fbAuth.onAuthStateChanged(user=>{
+      _fbUser=user;
+      if(user) _cloudLoad();
+      else _setSyncState({status:'idle',user:null});
+    });
+  }catch(e){console.warn('Firebase init:',e);}
+})();
+/* ─────────────────────────────────────────────────────────────────── */
 
 const useIsMobile = () => {
   const [v, setV] = useState(() => window.innerWidth < 700);
@@ -281,6 +384,60 @@ const PageTitle = ({ children }) => (
 );
 
 /* ── Top Bar ────────────────────────────────────────────────────── */
+const SyncButton = () => {
+  const sync = useSyncStatus();
+  const [open, setOpen] = useState(false);
+  const dotColor = sync.status==='synced'?'#68c97a'
+    :sync.status==='syncing'?C.accent
+    :sync.status==='error'?'#e57373':C.border;
+  const label = sync.status==='syncing'?'Syncing…'
+    :sync.status==='synced'?'Synced'
+    :sync.status==='error'?'Error':'Sync';
+  return (
+    <div style={{position:'relative'}}>
+      <button onClick={()=>setOpen(o=>!o)}
+        title={sync.user?`Signed in as ${sync.user.email}`:'Enable cross-device sync'}
+        style={{display:'flex',alignItems:'center',gap:5,padding:'6px 11px',borderRadius:10,
+          background:`${C.pink}55`,border:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:12,color:C.text}}>
+        <span style={{width:7,height:7,borderRadius:'50%',background:dotColor,flexShrink:0,
+          boxShadow:sync.status==='syncing'?`0 0 5px ${C.accent}`:undefined}}/>
+        {label}
+      </button>
+      {open && (
+        <div onClick={e=>e.stopPropagation()}
+          style={{position:'absolute',right:0,top:44,background:C.cream,border:`0.5px solid ${C.border}`,
+            borderRadius:14,padding:'18px 20px',boxShadow:'0 6px 28px rgba(0,0,0,0.13)',width:238,zIndex:300}}>
+          {sync.user ? (
+            <>
+              <div style={{fontSize:11.5,color:C.textMuted,marginBottom:3}}>Signed in as</div>
+              <div style={{fontSize:13,color:C.text,fontWeight:500,marginBottom:16,wordBreak:'break-all'}}>{sync.user.email}</div>
+              <button onClick={()=>{cloudSave();setOpen(false);}}
+                style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
+                  border:'none',cursor:'pointer',fontSize:13,marginBottom:8}}>Sync now ↑</button>
+              <button onClick={()=>{fbSignOut();setOpen(false);}}
+                style={{width:'100%',padding:'9px',borderRadius:9,background:`${C.pink}80`,
+                  color:C.rose,border:'none',cursor:'pointer',fontSize:13}}>Sign out</button>
+            </>
+          ) : (
+            <>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:C.rose,marginBottom:8}}>Cross-device sync</div>
+              <div style={{fontSize:12.5,color:C.textMuted,marginBottom:16,lineHeight:1.6}}>
+                Sign in with Google to keep your tasks, calendar, notebook and everything else in sync across your laptop and phone.
+              </div>
+              <button onClick={()=>{signInWithGoogle();setOpen(false);}}
+                style={{width:'100%',padding:'10px',borderRadius:9,background:C.rose,color:'#fff',
+                  border:'none',cursor:'pointer',fontSize:13,fontWeight:500}}>Sign in with Google</button>
+              {!FB_CONFIG.apiKey&&<div style={{fontSize:11,color:'#e57373',marginTop:10,lineHeight:1.5}}>
+                ⚠ Firebase config not filled in yet.
+              </div>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TopBar = () => {
   const now = new Date();
   const h = now.getHours();
@@ -298,6 +455,7 @@ const TopBar = () => {
         <div style={{ fontSize:11.5, color:C.textLight, marginTop:1 }}>{date}</div>
       </div>
       <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <SyncButton />
         {showSearch && (
           <input autoFocus value={search} onChange={e=>setSearch(e.target.value)}
             placeholder="Search..." onBlur={()=>{ if(!search) setShowSearch(false); }}
