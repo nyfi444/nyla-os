@@ -3395,10 +3395,30 @@ const GoalsPanel = ({ sub }) => {
 
   const filtered = goals.filter(g=>{
     const pt = g.periodType||'yearly';
-    if(sub==='Yearly') return pt==='yearly' && (g.periodValue||String(curYear))===String(selYear);
-    if(sub==='Quarterly') return pt==='quarterly' && g.periodValue===getPeriodValue(selYear,selQ,selMonth);
+    if(sub==='Yearly') {
+      if(pt==='yearly') return (g.periodValue||String(curYear))===String(selYear);
+      if(pt==='quarterly') return (g.periodValue||'').startsWith(String(selYear)+'-Q');
+      if(pt==='monthly') return (g.periodValue||'').startsWith(String(selYear)+'-');
+      return false;
+    }
+    if(sub==='Quarterly') {
+      if(pt==='quarterly') return g.periodValue===getPeriodValue(selYear,selQ,selMonth);
+      if(pt==='monthly') {
+        const parts=(g.periodValue||'').split('-');
+        const gy=parseInt(parts[0]), gm=parseInt(parts[1]);
+        return gy===selYear && Math.ceil(gm/3)===selQ;
+      }
+      return false;
+    }
     if(sub==='Monthly') return pt==='monthly' && g.periodValue===getPeriodValue(selYear,selQ,selMonth);
     return true;
+  });
+  // Sort: own-period goals first, then sub-period goals by their date
+  filtered.sort((a,b)=>{
+    const aPrimary = a.periodType===getPeriodType()?0:1;
+    const bPrimary = b.periodType===getPeriodType()?0:1;
+    if(aPrimary!==bPrimary) return aPrimary-bPrimary;
+    return (a.periodValue||'').localeCompare(b.periodValue||'');
   });
 
   const total=filtered.length, completed=filtered.filter(g=>g.progress===100).length;
@@ -3462,6 +3482,12 @@ const GoalsPanel = ({ sub }) => {
               <div style={{ fontSize:14, fontWeight:500, color:C.text }}>{g.title}</div>
               {g.category && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:10, background:catColor+'80', color:C.roseDark }}>{g.category}</span>}
               {g.progress===100 && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:10, background:'#d4edda', color:'#2E7D32' }}>✓ Complete</span>}
+              {g.periodType!==getPeriodType() && g.periodValue && (() => {
+                let label = g.periodValue;
+                if(g.periodType==='monthly') { const parts=g.periodValue.split('-'); label=MONTHS3[parseInt(parts[1])-1]+(sub==='Yearly'?' '+parts[0]:''); }
+                else if(g.periodType==='quarterly') { label=g.periodValue.split('-')[1]; }
+                return <span style={{ fontSize:10, padding:'2px 7px', borderRadius:10, background:`${C.lavender}60`, color:C.roseDark, fontWeight:500 }}>{label}</span>;
+              })()}
             </div>
             {g.description && <div style={{ fontSize:12.5, color:C.textLight, lineHeight:1.5, marginBottom:8 }}>{g.description}</div>}
             <div style={{ marginBottom:4 }}>
@@ -3822,10 +3848,12 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
       const res=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:512,system:agent.systemPrompt,messages:history.map(m=>({role:m.role,content:m.text}))}),
+        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:512,system:agent.systemPrompt+AGENT_CMD_DOCS,messages:history.map(m=>({role:m.role,content:m.text}))}),
       });
       const data=await res.json();
-      setMsgs(m=>[...m,{role:'assistant',text:data.content?.[0]?.text||'Sorry, I had trouble with that.'}]);
+      const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
+      setMsgs(m=>[...m,{role:'assistant',text:reply}]);
+      execAgentCmd(reply);
     } catch(e) {
       setMsgs(m=>[...m,{role:'assistant',text:'⚠️ Connection issue. Check your API key.'}]);
     } finally { setLoading(false); }
@@ -4514,16 +4542,64 @@ const MainContent = ({ navId, sub, onRestoreBiz }) => (
   </div>
 );
 
+/* ── Shared Agent Command Executor ─────────────────────────────── */
+const AGENT_CMD_DOCS = `
+
+You can take direct action in Nyla's dashboard. When she asks you to create or update something, respond conversationally then include ONE command block at the END:
+- Add task:             [CMD:{"action":"addTask","text":"task text"}]
+- Complete task:        [CMD:{"action":"completeTask","text":"partial task name"}]
+- Add goal:             [CMD:{"action":"addGoal","title":"goal title","category":"Personal|Business|Health|Financial|Creative|Spiritual|Education","periodType":"monthly|quarterly|yearly","periodValue":"YYYY-MM or YYYY-QN or YYYY","targetDate":"YYYY-MM-DD"}]
+- Update goal progress: [CMD:{"action":"updateGoalProgress","title":"goal title","progress":50}]
+- Add calendar event:   [CMD:{"action":"addEvent","date":"YYYY-MM-DD","text":"event description"}]
+- Add note:             [CMD:{"action":"addNote","folder":"All Notes","name":"page title","content":"note content"}]
+- Create notebook:      [CMD:{"action":"createNotebook","name":"notebook folder name"}]
+
+Only include ONE command per response, and only when actually performing the action.`;
+
+const execAgentCmd = text => {
+  const match = text.match(/\[CMD:(\{[\s\S]*?\})\]/);
+  if (!match) return;
+  try {
+    const cmd = JSON.parse(match[1]);
+    if (cmd.action==='addTask') {
+      const t=JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
+      t.push({id:Date.now(),text:cmd.text,done:false,created:new Date().toISOString()});
+      localStorage.setItem('nylaos_tasks',JSON.stringify(t));
+    } else if (cmd.action==='completeTask') {
+      const t=JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
+      const q=(cmd.text||'').toLowerCase();
+      localStorage.setItem('nylaos_tasks',JSON.stringify(t.map(x=>x.text.toLowerCase().includes(q)?{...x,done:true}:x)));
+    } else if (cmd.action==='addGoal') {
+      const now=new Date();
+      const g=JSON.parse(localStorage.getItem('nylaos_goals')||'[]');
+      const pt=cmd.periodType||'monthly';
+      const pv=cmd.periodValue||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+      g.push({id:Date.now(),title:cmd.title,description:cmd.description||'',targetDate:cmd.targetDate||'',category:cmd.category||'',progress:0,periodType:pt,periodValue:pv,created:now.toISOString()});
+      localStorage.setItem('nylaos_goals',JSON.stringify(g));
+    } else if (cmd.action==='updateGoalProgress') {
+      const g=JSON.parse(localStorage.getItem('nylaos_goals')||'[]');
+      const q=(cmd.title||'').toLowerCase();
+      localStorage.setItem('nylaos_goals',JSON.stringify(g.map(x=>x.title.toLowerCase().includes(q)?{...x,progress:Math.min(100,Math.max(0,parseInt(cmd.progress)||0))}:x)));
+    } else if (cmd.action==='addEvent') {
+      const e=JSON.parse(localStorage.getItem('nylaos_events')||'[]');
+      e.push({id:Date.now(),date:cmd.date,text:cmd.text});
+      localStorage.setItem('nylaos_events',JSON.stringify(e));
+    } else if (cmd.action==='addNote') {
+      const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
+      const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
+      const folder=folders.find(f=>f.name===(cmd.folder||'All Notes'));
+      pages.push({id:Date.now(),name:cmd.name||'New Note',folderId:folder?folder.id:1,content:cmd.content||'',created:new Date().toISOString(),updated:new Date().toISOString()});
+      localStorage.setItem('nylaos_nb_pages',JSON.stringify(pages));
+    } else if (cmd.action==='createNotebook') {
+      const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
+      folders.push({id:Date.now(),name:cmd.name||'New Notebook',created:new Date().toISOString()});
+      localStorage.setItem('nylaos_nb_folders',JSON.stringify(folders));
+    }
+  } catch(e) { console.error('Agent CMD error',e); }
+};
+
 /* ── Floating AI Chat ───────────────────────────────────────────── */
-const FLOAT_SYSTEM = `You are Nyla's personal dashboard assistant — warm, wise, and efficient. You help manage her tasks, goals, calendar, and notes.
-
-When Nyla asks you to add or update something, respond conversationally then include a command block at the END:
-- Add task:    [CMD:{"action":"addTask","text":"task text"}]
-- Add goal:    [CMD:{"action":"addGoal","title":"goal","category":"Personal|Business|Health|Financial|Creative|Spiritual|Education","targetDate":"YYYY-MM-DD"}]
-- Add event:   [CMD:{"action":"addEvent","date":"YYYY-MM-DD","text":"event description"}]
-- Add note:    [CMD:{"action":"addNote","folder":"All Notes","name":"page title","content":"note content"}]
-
-Always be warm and concise. Only include the command if you're actually creating/updating something.`;
+const FLOAT_SYSTEM = `You are Nyla's personal dashboard assistant — warm, wise, and efficient. You help manage her tasks, goals, calendar, and notes. Always be warm and concise.${AGENT_CMD_DOCS}`;
 
 const FloatingChat = () => {
   const [open, setOpen] = useState(false);
@@ -4532,33 +4608,6 @@ const FloatingChat = () => {
   const [loading, setLoading] = useState(false);
   const endRef = useRef(null);
   useEffect(()=>{ if(open) endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,open]);
-
-  const execCmd = text => {
-    const match = text.match(/\[CMD:(\{[\s\S]*?\})\]/);
-    if (!match) return;
-    try {
-      const cmd = JSON.parse(match[1]);
-      if (cmd.action==='addTask') {
-        const t=JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
-        t.push({id:Date.now(),text:cmd.text,done:false,created:new Date().toISOString()});
-        localStorage.setItem('nylaos_tasks',JSON.stringify(t));
-      } else if (cmd.action==='addGoal') {
-        const g=JSON.parse(localStorage.getItem('nylaos_goals')||'[]');
-        g.push({id:Date.now(),title:cmd.title,description:'',targetDate:cmd.targetDate||'',category:cmd.category||'',progress:0,created:new Date().toISOString()});
-        localStorage.setItem('nylaos_goals',JSON.stringify(g));
-      } else if (cmd.action==='addEvent') {
-        const e=JSON.parse(localStorage.getItem('nylaos_events')||'[]');
-        e.push({id:Date.now(),date:cmd.date,text:cmd.text});
-        localStorage.setItem('nylaos_events',JSON.stringify(e));
-      } else if (cmd.action==='addNote') {
-        const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
-        const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
-        const folder=folders.find(f=>f.name===(cmd.folder||'All Notes'));
-        pages.push({id:Date.now(),name:cmd.name||'New Note',folderId:folder?folder.id:1,content:cmd.content||'',created:new Date().toISOString(),updated:new Date().toISOString()});
-        localStorage.setItem('nylaos_nb_pages',JSON.stringify(pages));
-      }
-    } catch(e) { console.error('FloatingChat CMD error',e); }
-  };
 
   const send = async () => {
     if (!input.trim()||loading) return;
@@ -4576,7 +4625,7 @@ const FloatingChat = () => {
       const data=await res.json();
       const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
       setMsgs(m=>[...m,{role:'assistant',text:reply}]);
-      execCmd(reply);
+      execAgentCmd(reply);
     } catch(e) {
       setMsgs(m=>[...m,{role:'assistant',text:'⚠️ Connection issue. Check your API key in Settings.'}]);
     } finally { setLoading(false); }
