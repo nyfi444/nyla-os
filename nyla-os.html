@@ -628,6 +628,7 @@ const HomeOverview = () => {
   const [note, setNote] = useState(()=>localStorage.getItem('nylaos_quicknote')||'');
   const [intention, setIntention] = useState(()=>localStorage.getItem('nylaos_intention_'+new Date().toDateString())||'');
   const [gratitude, setGratitude] = useState(()=>localStorage.getItem('nylaos_gratitude_'+new Date().toDateString())||'');
+  const [dailyFocus, setDailyFocus] = useState(()=>localStorage.getItem('nylaos_focus_'+new Date().toDateString())||'');
   const [affirmations, setAffirmations] = useState(()=>JSON.parse(localStorage.getItem('nylaos_affirmations')||'null')||DEFAULT_AFFIRMATIONS);
   const [editAffirms, setEditAffirms] = useState(false);
   const tasks = JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
@@ -667,16 +668,8 @@ const HomeOverview = () => {
       {/* Today's Focus */}
       <Card>
         <SectionHeading>Today's Focus</SectionHeading>
-        {pending.length===0
-          ? <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic', paddingTop:4 }}>All clear ✓ Enjoy your day.</div>
-          : pending.slice(0,5).map(t=>(
-            <div key={t.id} style={{ fontSize:13.5, color:C.text, padding:'7px 0', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:9 }}>
-              <div style={{ width:6, height:6, borderRadius:'50%', background:C.rose, flexShrink:0, opacity:0.6 }} />
-              <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.text}</span>
-            </div>
-          ))
-        }
-        {pending.length>5 && <div style={{ fontSize:12, color:C.textMuted, paddingTop:8 }}>+{pending.length-5} more in Tasks</div>}
+        <TextArea value={dailyFocus} height={120} placeholder="What is your main focus for today?"
+          onChange={e=>{ setDailyFocus(e.target.value); localStorage.setItem('nylaos_focus_'+new Date().toDateString(),e.target.value); }} />
       </Card>
 
       {/* Daily Affirmation */}
