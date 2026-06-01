@@ -632,7 +632,7 @@ const HomeOverview = () => {
   const [affirmations, setAffirmations] = useState(()=>JSON.parse(localStorage.getItem('nylaos_affirmations')||'null')||DEFAULT_AFFIRMATIONS);
   const [editAffirms, setEditAffirms] = useState(false);
   const tasks = JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
-  const pending = tasks.filter(t=>!t.done);
+  const pending = tasks.filter(t=>!t.done && t.source!=='calendar');
   const userName = JSON.parse(localStorage.getItem('nylaos_profile')||'{"name":"Nyla"}').name || 'Nyla';
   const saveAffirmations = arr => { setAffirmations(arr); localStorage.setItem('nylaos_affirmations',JSON.stringify(arr)); };
   const todayAffirm = affirmations[new Date().getDate() % affirmations.length] || affirmations[0];
@@ -867,7 +867,7 @@ const DayPanel = ({ dateKey, label }) => {
 
   const addItem = () => {
     if(!newText.trim()) return;
-    saveTasks([...allTasks,{id:Date.now(),text:newText.trim(),done:false,calendarDate:dateKey,time:newTime||null,created:new Date().toISOString()}]);
+    saveTasks([...allTasks,{id:Date.now(),text:newText.trim(),done:false,calendarDate:dateKey,time:newTime||null,source:'calendar',created:new Date().toISOString()}]);
     setNewText(''); setNewTime('');
   };
   const toggleDone = id => saveTasks(allTasks.map(t=>t.id===id?{...t,done:!t.done}:t));
@@ -1207,7 +1207,7 @@ const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
   if (sub==='Recently Deleted') return <TrashPanel type="task" />;
 
   const isCompleted = sub==='Completed';
-  const filtered = isCompleted ? tasks.filter(t=>t.done) : tasks.filter(t=>!t.done);
+  const filtered = isCompleted ? tasks.filter(t=>t.done && t.source!=='calendar') : tasks.filter(t=>!t.done && t.source!=='calendar');
 
   const BtnStyle = (active) => ({
     width:28, height:28, borderRadius:7, border:`0.5px solid ${C.border}`,
