@@ -239,7 +239,7 @@ const NAV = [
   { id:'cosmic',     label:'Cosmic',     sub:['Moon Phase','Numerology','Astrology','Matrix of Destiny'] },
   { id:'university', label:'University', sub:['Courses','Assignments','GPA Calculator','Resources'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
-  { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Appearance','Notifications','Backup & Restore'] },
+  { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Chat History','Appearance','Notifications','Backup & Restore'] },
 ];
 
 /* ── Constants ──────────────────────────────────────────────────── */
@@ -2722,18 +2722,31 @@ const BusinessPanel = ({ sub }) => {
   );
 };
 
+/* ── Chat History Helper ────────────────────────────────────────── */
+const saveChatSession = (id, label, type, msgs) => {
+  if (!msgs || !msgs.some(m=>m.role==='user')) return;
+  const all = JSON.parse(localStorage.getItem('nylaos_chat_history')||'[]');
+  const idx = all.findIndex(h=>h.id===id);
+  const sess = {id, label, type, date:new Date().toISOString(), msgs};
+  if (idx>=0) all[idx]=sess; else all.unshift(sess);
+  localStorage.setItem('nylaos_chat_history', JSON.stringify(all.slice(0,200)));
+};
+
 /* ── Cosmic Chat (shared AI panel) ─────────────────────────────── */
-const CosmicChat = ({ systemPrompt, placeholder }) => {
+const CosmicChat = ({ systemPrompt, placeholder, label='Cosmic' }) => {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const sessionId = useRef(null);
   const endRef = useRef(null);
-  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading]);
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,fullscreen]);
 
   const send = async () => {
     if (!input.trim() || loading) return;
     const apiKey = localStorage.getItem('nylaos_api_key');
     if (!apiKey) { setMsgs(m=>[...m,{role:'assistant',text:'Please add your Anthropic API key in Settings → API Keys to unlock cosmic AI readings.'}]); return; }
+    if (!sessionId.current) sessionId.current = Date.now();
     const userText = input.trim();
     const history = [...msgs, {role:'user', text:userText}];
     setMsgs(history); setInput(''); setLoading(true);
@@ -2745,42 +2758,56 @@ const CosmicChat = ({ systemPrompt, placeholder }) => {
       });
       const data = await res.json();
       const reply = data.content?.[0]?.text || 'I couldn\'t get a response — please try again.';
-      setMsgs(m=>[...m,{role:'assistant',text:reply}]);
+      const updated = [...history, {role:'assistant',text:reply}];
+      setMsgs(updated);
+      saveChatSession(sessionId.current, label, 'cosmic', updated);
     } catch(e) {
       setMsgs(m=>[...m,{role:'assistant',text:'⚠️ Connection issue. Check your API key in Settings → API Keys.'}]);
     } finally { setLoading(false); }
   };
 
+  const renderMsgs = () => (<>
+    {msgs.length===0 && <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic', padding:'16px 0' }}>Ask anything — your chart, a transit, what a placement means for you...</div>}
+    {msgs.map((m,i)=>(
+      <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+        <div style={{ maxWidth:'88%', padding:'10px 14px', borderRadius:14, fontSize:13, lineHeight:1.7,
+          background:m.role==='user'?C.rose:`${C.lavender}DD`, color:m.role==='user'?'#fff':C.rose,
+          borderBottomRightRadius:m.role==='user'?3:14, borderBottomLeftRadius:m.role==='assistant'?3:14, whiteSpace:'pre-wrap',
+        }}>{m.text}</div>
+      </div>
+    ))}
+    {loading && <div style={{ display:'flex' }}><div style={{ padding:'10px 14px', borderRadius:14, background:`${C.lavender}DD`, borderBottomLeftRadius:3, fontSize:13, color:C.textLight }}>✦ reading the stars...</div></div>}
+    <div ref={endRef}/>
+  </>);
+
+  const renderInput = () => (
+    <div style={{ display:'flex', gap:8 }}>
+      <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
+        placeholder={placeholder||'Ask a cosmic question...'}
+        style={{ flex:1, padding:'10px 14px', borderRadius:12, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13 }}/>
+      <button onClick={send} disabled={loading||!input.trim()} style={{ padding:'10px 20px', borderRadius:12, background:loading?C.textMuted:C.rose, color:'#fff', border:'none', fontSize:15, cursor:'pointer' }}>↑</button>
+    </div>
+  );
+
+  if (fullscreen) return (
+    <div style={{ position:'fixed', inset:0, zIndex:9998, background:C.cream, display:'flex', flexDirection:'column' }}>
+      <div style={{ padding:'12px 20px', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', background:C.sidebarBg, flexShrink:0 }}>
+        <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:16, color:C.rose }}>✦ {label}</div>
+        <button onClick={()=>setFullscreen(false)} style={{ background:'none', border:'none', fontSize:20, color:C.textMuted, cursor:'pointer', lineHeight:1 }}>✕</button>
+      </div>
+      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:8 }}>{renderMsgs()}</div>
+      <div style={{ padding:'12px 20px', borderTop:`0.5px solid ${C.border}`, background:C.cream }}>{renderInput()}</div>
+    </div>
+  );
+
   return (
     <Card style={{ marginTop:20 }}>
-      <SectionHeading>✦ Ask the Cosmos</SectionHeading>
-      <div style={{ height:300, overflowY:'auto', display:'flex', flexDirection:'column', gap:8, marginBottom:12, padding:'4px 0' }}>
-        {msgs.length===0 && (
-          <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic', padding:'16px 0' }}>
-            Ask anything — your chart, a transit, what a placement means for you...
-          </div>
-        )}
-        {msgs.map((m,i)=>(
-          <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
-            <div style={{ maxWidth:'88%', padding:'10px 14px', borderRadius:14, fontSize:13, lineHeight:1.7,
-              background:m.role==='user'?C.rose:`${C.lavender}DD`, color:m.role==='user'?'#fff':C.rose,
-              borderBottomRightRadius:m.role==='user'?3:14, borderBottomLeftRadius:m.role==='assistant'?3:14, whiteSpace:'pre-wrap',
-            }}>{m.text}</div>
-          </div>
-        ))}
-        {loading && (
-          <div style={{ display:'flex' }}>
-            <div style={{ padding:'10px 14px', borderRadius:14, background:`${C.lavender}DD`, borderBottomLeftRadius:3, fontSize:13, color:C.textLight }}>✦ reading the stars...</div>
-          </div>
-        )}
-        <div ref={endRef}/>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+        <SectionHeading style={{ marginBottom:0 }}>✦ Ask the Cosmos</SectionHeading>
+        <button onClick={()=>setFullscreen(true)} title="Fullscreen" style={{ background:'none', border:`0.5px solid ${C.border}`, borderRadius:7, padding:'3px 9px', fontSize:13, color:C.textMuted, cursor:'pointer' }}>⤢</button>
       </div>
-      <div style={{ display:'flex', gap:8 }}>
-        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
-          placeholder={placeholder||'Ask a cosmic question...'}
-          style={{ flex:1, padding:'10px 14px', borderRadius:12, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13 }}/>
-        <button onClick={send} disabled={loading||!input.trim()} style={{ padding:'10px 20px', borderRadius:12, background:loading?C.textMuted:C.rose, color:'#fff', border:'none', fontSize:15, cursor:'pointer' }}>↑</button>
-      </div>
+      <div style={{ height:300, overflowY:'auto', display:'flex', flexDirection:'column', gap:8, marginBottom:12, padding:'4px 0' }}>{renderMsgs()}</div>
+      {renderInput()}
     </Card>
   );
 };
@@ -2997,7 +3024,7 @@ const NumerologyPanel = () => {
         </Card>
       ))}
 
-      <CosmicChat systemPrompt={NUM_SYS} placeholder="Ask about your numbers, personal year, name numerology..." />
+      <CosmicChat label="Numerology" systemPrompt={NUM_SYS} placeholder="Ask about your numbers, personal year, name numerology..." />
     </div>
   );
 };
@@ -3186,7 +3213,7 @@ const AstrologyPanel = () => {
         ))}
       </div>
 
-      <CosmicChat systemPrompt={ASTRO_SYS} placeholder="Ask about your chart, a transit, synastry, or what a placement means..." />
+      <CosmicChat label="Astrology" systemPrompt={ASTRO_SYS} placeholder="Ask about your chart, a transit, synastry, or what a placement means..." />
     </div>
   );
 };
@@ -3303,7 +3330,7 @@ const MatrixOfDestinyPanel = () => {
       <ArcanaCard n={12} pos="Portal F & H — recurring surrender theme"
         desc="The Hanged Man (Arcana 12) appearing in both your right diagonal portals creates a sacred pairing with The Tower. After every breakthrough (Tower), you are invited into surrender (Hanged Man) — a voluntary shift in perspective that allows wisdom to integrate. The Hanged Man sees the world upside down, and what looks like defeat is actually initiation. For you, the moments in life when everything pauses, when nothing makes forward sense, when you must simply wait and receive — these are your most spiritually potent moments. Do not push through them. In the Hanged Man's stillness, your downloads arrive."/>
 
-      <CosmicChat systemPrompt={MOD_SYS} placeholder="Ask about your matrix, an arcana's meaning, your karma, destiny line..." />
+      <CosmicChat label="Matrix of Destiny" systemPrompt={MOD_SYS} placeholder="Ask about your matrix, an arcana's meaning, your karma, destiny line..." />
     </div>
   );
 };
@@ -3834,13 +3861,16 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
   const [msgs, setMsgs] = useState([{role:'assistant',text:`Hi Nyla! I'm your ${agent.name}. How can I help you today? ✦`}]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const sessionId = useRef(null);
   const endRef = useRef(null);
-  useEffect(()=>{ if(open) endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading]);
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,fullscreen]);
 
   const send = async () => {
     if(!input.trim()||loading) return;
     const key=localStorage.getItem('nylaos_api_key');
     if(!key){alert('Add your API key in Settings → API Keys first');return;}
+    if(!sessionId.current) sessionId.current=Date.now();
     const userText=input.trim();
     const history=[...msgs,{role:'user',text:userText}];
     setMsgs(history); setInput(''); setLoading(true);
@@ -3852,51 +3882,77 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
       });
       const data=await res.json();
       const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
-      setMsgs(m=>[...m,{role:'assistant',text:reply}]);
+      const updated=[...history,{role:'assistant',text:reply}];
+      setMsgs(updated);
       execAgentCmd(reply);
+      saveChatSession(sessionId.current, agent.name, 'agent', updated);
     } catch(e) {
       setMsgs(m=>[...m,{role:'assistant',text:'⚠️ Connection issue. Check your API key.'}]);
     } finally { setLoading(false); }
   };
 
-  return (
-    <Card style={{ padding:'18px', display:'flex', flexDirection:'column' }}>
-      <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:12 }}>
-        <div style={{ width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, flexShrink:0 }}>{agent.emoji}</div>
-        <div style={{ flex:1 }}>
-          <div style={{ fontSize:14, fontWeight:500, color:C.rose, marginBottom:2 }}>{agent.name}</div>
-          <div style={{ fontSize:12, color:C.textLight, lineHeight:1.4 }}>{agent.role}</div>
-        </div>
-        <div style={{ display:'flex', gap:4, flexShrink:0 }}>
-          {onEdit&&<button onClick={onEdit} style={{ background:`${C.lavender}90`,border:'none',borderRadius:7,padding:'4px 9px',fontSize:11,color:C.rose,cursor:'pointer' }}>Edit</button>}
-          {onDelete&&<button onClick={onDelete} style={{ background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:18,lineHeight:1 }}>×</button>}
-        </div>
+  const renderMsgs = () => (<>
+    {msgs.map((m,i)=>(
+      <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+        <div style={{ maxWidth:'86%', padding:'8px 12px', borderRadius:12, fontSize:12.5, lineHeight:1.6,
+          background:m.role==='user'?C.rose:`${C.lavender}CC`, color:m.role==='user'?'#fff':C.rose,
+          borderBottomRightRadius:m.role==='user'?3:12, borderBottomLeftRadius:m.role==='assistant'?3:12, whiteSpace:'pre-wrap' }}>{m.text}</div>
       </div>
-      <button onClick={()=>setChatOpen(o=>!o)} style={{ padding:'7px 0', borderRadius:10, background:chatOpen?C.rose:`${C.pink}55`, color:chatOpen?'#fff':C.rose, border:`0.5px solid ${chatOpen?C.rose:C.border}`, fontSize:12.5, cursor:'pointer', transition:'all 0.15s' }}>
-        {chatOpen?'Close Chat':'✦ Open Chat'}
-      </button>
-      {chatOpen && (
-        <div style={{ marginTop:10, border:`0.5px solid ${C.border}`, borderRadius:12, overflow:'hidden' }}>
-          <div style={{ height:210, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8, background:C.lavLight }}>
-            {msgs.map((m,i)=>(
-              <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
-                <div style={{ maxWidth:'86%', padding:'8px 12px', borderRadius:12, fontSize:12.5, lineHeight:1.6,
-                  background:m.role==='user'?C.rose:`${C.lavender}CC`, color:m.role==='user'?'#fff':C.rose,
-                  borderBottomRightRadius:m.role==='user'?3:12, borderBottomLeftRadius:m.role==='assistant'?3:12, whiteSpace:'pre-wrap' }}>{m.text}</div>
-              </div>
-            ))}
-            {loading&&<div style={{ fontSize:12,color:C.textMuted,fontStyle:'italic' }}>thinking...</div>}
-            <div ref={endRef}/>
+    ))}
+    {loading&&<div style={{ fontSize:12,color:C.textMuted,fontStyle:'italic' }}>thinking...</div>}
+    <div ref={endRef}/>
+  </>);
+
+  const renderInput = () => (
+    <div style={{ padding:'8px 10px', borderTop:`0.5px solid ${C.border}`, display:'flex', gap:6, background:C.cream }}>
+      <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
+        placeholder={`Message ${agent.name}...`}
+        style={{ flex:1, padding:'7px 11px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12 }}/>
+      <button onClick={()=>setFullscreen(f=>!f)} title={fullscreen?'Exit fullscreen':'Fullscreen'}
+        style={{ padding:'7px 10px', borderRadius:9, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13, cursor:'pointer' }}>⤢</button>
+      <button onClick={send} disabled={loading} style={{ padding:'7px 13px', borderRadius:9, background:C.rose, color:'#fff', border:'none', fontSize:13, cursor:'pointer' }}>↑</button>
+    </div>
+  );
+
+  return (
+    <>
+      {chatOpen && fullscreen && (
+        <div style={{ position:'fixed', inset:0, zIndex:9998, background:C.cream, display:'flex', flexDirection:'column' }}>
+          <div style={{ padding:'12px 18px', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:12, background:C.sidebarBg, flexShrink:0 }}>
+            <div style={{ width:34, height:34, borderRadius:10, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>{agent.emoji}</div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:14, fontWeight:500, color:C.rose }}>{agent.name}</div>
+              <div style={{ fontSize:11.5, color:C.textLight }}>{agent.role}</div>
+            </div>
+            <button onClick={()=>setFullscreen(false)} style={{ background:'none', border:'none', fontSize:20, color:C.textMuted, cursor:'pointer', lineHeight:1 }}>✕</button>
           </div>
-          <div style={{ padding:'8px 10px', borderTop:`0.5px solid ${C.border}`, display:'flex', gap:6, background:C.cream }}>
-            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
-              placeholder={`Message ${agent.name}...`}
-              style={{ flex:1, padding:'7px 11px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12 }}/>
-            <button onClick={send} disabled={loading} style={{ padding:'7px 13px', borderRadius:9, background:C.rose, color:'#fff', border:'none', fontSize:13, cursor:'pointer' }}>↑</button>
-          </div>
+          <div style={{ flex:1, overflowY:'auto', padding:'12px 18px', display:'flex', flexDirection:'column', gap:8, background:C.lavLight }}>{renderMsgs()}</div>
+          {renderInput()}
         </div>
       )}
-    </Card>
+      <Card style={{ padding:'18px', display:'flex', flexDirection:'column' }}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:12 }}>
+          <div style={{ width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, flexShrink:0 }}>{agent.emoji}</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:14, fontWeight:500, color:C.rose, marginBottom:2 }}>{agent.name}</div>
+            <div style={{ fontSize:12, color:C.textLight, lineHeight:1.4 }}>{agent.role}</div>
+          </div>
+          <div style={{ display:'flex', gap:4, flexShrink:0 }}>
+            {onEdit&&<button onClick={onEdit} style={{ background:`${C.lavender}90`,border:'none',borderRadius:7,padding:'4px 9px',fontSize:11,color:C.rose,cursor:'pointer' }}>Edit</button>}
+            {onDelete&&<button onClick={onDelete} style={{ background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:18,lineHeight:1 }}>×</button>}
+          </div>
+        </div>
+        <button onClick={()=>setChatOpen(o=>!o)} style={{ padding:'7px 0', borderRadius:10, background:chatOpen?C.rose:`${C.pink}55`, color:chatOpen?'#fff':C.rose, border:`0.5px solid ${chatOpen?C.rose:C.border}`, fontSize:12.5, cursor:'pointer', transition:'all 0.15s' }}>
+          {chatOpen?'Close Chat':'✦ Open Chat'}
+        </button>
+        {chatOpen && !fullscreen && (
+          <div style={{ marginTop:10, border:`0.5px solid ${C.border}`, borderRadius:12, overflow:'hidden' }}>
+            <div style={{ height:210, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8, background:C.lavLight }}>{renderMsgs()}</div>
+            {renderInput()}
+          </div>
+        )}
+      </Card>
+    </>
   );
 };
 
@@ -3908,9 +3964,11 @@ const AgentsChat = () => {
   const [loading, setLoading] = useState(false);
   const [apiKey, setApiKey] = useState(()=>localStorage.getItem('nylaos_api_key')||'');
   const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('nylaos_api_key'));
+  const [fullscreen, setFullscreen] = useState(false);
+  const sessionId = useRef(null);
   const endRef = useRef(null);
 
-  useEffect(()=>endRef.current?.scrollIntoView({behavior:'smooth'}),[msgs,loading]);
+  useEffect(()=>endRef.current?.scrollIntoView({behavior:'smooth'}),[msgs,loading,fullscreen]);
 
   const saveKey = k => { setApiKey(k); localStorage.setItem('nylaos_api_key',k); if(k) setShowKeyInput(false); };
 
@@ -3944,62 +4002,76 @@ const AgentsChat = () => {
         throw new Error(err.error?.message||`HTTP ${res.status}`);
       }
       const data = await res.json();
-      setMsgs(m=>[...m, { role:'assistant', text:data.content[0].text }]);
+      if(!sessionId.current) sessionId.current=Date.now();
+      const updated=[...history,{role:'assistant',text:data.content[0].text}];
+      setMsgs(updated);
+      saveChatSession(sessionId.current,'Nyla AI','main',updated);
     } catch(e) {
       setMsgs(m=>[...m, { role:'assistant', text:`⚠️ ${e.message}. Check your API key in Settings → API Keys.` }]);
     } finally { setLoading(false); }
   };
 
+  const renderMsgs = () => (<>
+    {msgs.map((m,i)=>(
+      <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+        <div style={{ maxWidth:'82%', padding:'11px 15px', borderRadius:16, background:m.role==='user'?C.rose:`${C.lavender}CC`,
+          color:m.role==='user'?'#fff':C.rose, fontSize:13.5, lineHeight:1.65,
+          borderBottomRightRadius:m.role==='user'?4:16, borderBottomLeftRadius:m.role==='assistant'?4:16, whiteSpace:'pre-wrap',
+        }}>{m.text}</div>
+      </div>
+    ))}
+    {loading && (
+      <div style={{ display:'flex', justifyContent:'flex-start' }}>
+        <div style={{ padding:'11px 18px', borderRadius:16, background:`${C.lavender}CC`, borderBottomLeftRadius:4, color:C.textLight, fontSize:13.5 }}>
+          <span style={{ display:'inline-flex', gap:4 }}>{[0,1,2].map(i=><span key={i} style={{ width:6,height:6,borderRadius:'50%',background:C.accent,display:'inline-block' }}>·</span>)}</span>
+        </div>
+      </div>
+    )}
+    <div ref={endRef}/>
+  </>);
+
+  const renderInput = () => (
+    <div style={{ padding:'12px 16px', borderTop:`0.5px solid ${C.border}`, display:'flex', gap:10 }}>
+      <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
+        placeholder={apiKey?'Message Nyla\'s AI...':'Add your API key above to begin'}
+        style={{ flex:1, padding:'10px 14px', borderRadius:12, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13.5 }}/>
+      <button onClick={()=>setFullscreen(f=>!f)} title={fullscreen?'Exit fullscreen':'Fullscreen'}
+        style={{ padding:'10px 14px', borderRadius:12, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:14, cursor:'pointer' }}>⤢</button>
+      <button onClick={send} disabled={loading||!apiKey} style={{ padding:'10px 20px', borderRadius:12, background:loading||!apiKey?C.textMuted:C.rose, color:'#fff', border:'none', fontSize:13.5, cursor:loading||!apiKey?'not-allowed':'pointer' }}>Send</button>
+    </div>
+  );
+
+  const keyCard = showKeyInput && (
+    <Card style={{ marginBottom:12, padding:'14px 16px', background:`${C.lavender}60` }}>
+      <div style={{ fontSize:13, color:C.rose, marginBottom:8 }}>Enter your Anthropic API key to activate Claude:</div>
+      <div style={{ display:'flex', gap:8 }}>
+        <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
+          placeholder="sk-ant-..." style={{ flex:1, padding:'8px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13 }}/>
+        <button onClick={()=>saveKey(apiKey)} style={{ padding:'8px 16px', borderRadius:10, background:C.rose, color:'#fff', border:'none', fontSize:13, cursor:'pointer' }}>Save</button>
+      </div>
+      <div style={{ fontSize:11, color:C.textMuted, marginTop:6 }}>Stored locally only. Never leaves your browser.</div>
+    </Card>
+  );
+
+  if (fullscreen) return (
+    <div style={{ position:'fixed', inset:0, zIndex:9998, background:C.cream, display:'flex', flexDirection:'column' }}>
+      <div style={{ padding:'12px 20px', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', background:C.sidebarBg, flexShrink:0 }}>
+        <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:16, color:C.rose }}>✦ Nyla AI</div>
+        <button onClick={()=>setFullscreen(false)} style={{ background:'none', border:'none', fontSize:20, color:C.textMuted, cursor:'pointer', lineHeight:1 }}>✕</button>
+      </div>
+      {keyCard}
+      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:12 }}>{renderMsgs()}</div>
+      {renderInput()}
+    </div>
+  );
+
   return (
     <div className="fade-in" style={{ maxWidth:600, display:'flex', flexDirection:'column', height:'calc(100vh - 152px)' }}>
       <PageTitle>AI Chat</PageTitle>
-      {showKeyInput && (
-        <Card style={{ marginBottom:12, padding:'14px 16px', background:`${C.lavender}60` }}>
-          <div style={{ fontSize:13, color:C.rose, marginBottom:8 }}>Enter your Anthropic API key to activate Claude:</div>
-          <div style={{ display:'flex', gap:8 }}>
-            <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
-              placeholder="sk-ant-..." style={{ flex:1, padding:'8px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13 }}/>
-            <button onClick={()=>saveKey(apiKey)} style={{ padding:'8px 16px', borderRadius:10, background:C.rose, color:'#fff', border:'none', fontSize:13, cursor:'pointer' }}>Save</button>
-          </div>
-          <div style={{ fontSize:11, color:C.textMuted, marginTop:6 }}>Stored locally only. Never leaves your browser.</div>
-        </Card>
-      )}
+      {keyCard}
       <Card style={{ flex:1, display:'flex', flexDirection:'column', padding:0, overflow:'hidden' }}>
-        <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:12 }}>
-          {msgs.map((m,i)=>(
-            <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
-              <div style={{
-                maxWidth:'82%', padding:'11px 15px', borderRadius:16,
-                background:m.role==='user'?C.rose:`${C.lavender}CC`,
-                color:m.role==='user'?'#fff':C.rose, fontSize:13.5, lineHeight:1.65,
-                borderBottomRightRadius:m.role==='user'?4:16,
-                borderBottomLeftRadius:m.role==='assistant'?4:16,
-                whiteSpace:'pre-wrap',
-              }}>{m.text}</div>
-            </div>
-          ))}
-          {loading && (
-            <div style={{ display:'flex', justifyContent:'flex-start' }}>
-              <div style={{ padding:'11px 18px', borderRadius:16, background:`${C.lavender}CC`, borderBottomLeftRadius:4, color:C.textLight, fontSize:13.5 }}>
-                <span style={{ display:'inline-flex', gap:4 }}>
-                  {[0,1,2].map(i=><span key={i} style={{ width:6, height:6, borderRadius:'50%', background:C.accent, display:'inline-block', animation:`pulse 1.2s ${i*0.2}s infinite` }}>·</span>)}
-                </span>
-              </div>
-            </div>
-          )}
-          <div ref={endRef}/>
-        </div>
-        <div style={{ padding:'12px 16px', borderTop:`0.5px solid ${C.border}`, display:'flex', gap:10 }}>
-          <input value={input} onChange={e=>setInput(e.target.value)}
-            onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()}
-            disabled={loading}
-            placeholder={apiKey?'Message Nyla\'s AI...':'Add your API key above to begin'}
-            style={{ flex:1, padding:'10px 14px', borderRadius:12, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13.5 }}/>
-          <button onClick={send} disabled={loading||!apiKey} style={{
-            padding:'10px 20px', borderRadius:12, background: loading||!apiKey ? C.textMuted : C.rose,
-            color:'#fff', border:'none', fontSize:13.5, cursor: loading||!apiKey?'not-allowed':'pointer',
-          }}>Send</button>
-        </div>
+        <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:12 }}>{renderMsgs()}</div>
+        {renderInput()}
       </Card>
     </div>
   );
@@ -4466,6 +4538,63 @@ const BackupPanel = () => {
 };
 
 /* ── Settings ───────────────────────────────────────────────────── */
+const ChatHistoryPanel = () => {
+  const [history, setHistory] = useState(()=>JSON.parse(localStorage.getItem('nylaos_chat_history')||'[]'));
+  const [expanded, setExpanded] = useState(null);
+
+  const deleteSession = id => {
+    const updated = history.filter(h=>h.id!==id);
+    setHistory(updated);
+    localStorage.setItem('nylaos_chat_history', JSON.stringify(updated));
+    if (expanded===id) setExpanded(null);
+  };
+  const clearAll = () => {
+    if (!window.confirm('Delete all chat history?')) return;
+    setHistory([]); localStorage.removeItem('nylaos_chat_history');
+  };
+
+  const typeLabel = t => ({main:'Nyla AI',float:'Quick Chat',agent:'Agent',cosmic:'Cosmic'}[t]||t);
+  const fmt = d => { const dt=new Date(d); return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' · '+dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}); };
+
+  return (
+    <div className="fade-in" style={{ maxWidth:620 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <PageTitle style={{ marginBottom:0 }}>Chat History</PageTitle>
+        {history.length>0 && <button onClick={clearAll} style={{ fontSize:12, padding:'5px 13px', borderRadius:10, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, cursor:'pointer' }}>Clear All</button>}
+      </div>
+      {history.length===0 && <Card><div style={{ fontSize:13.5, color:C.textLight, lineHeight:1.7 }}>No chat history yet. Start a conversation with any AI chat and it will appear here.</div></Card>}
+      {history.map(sess=>(
+        <Card key={sess.id} style={{ marginBottom:10, padding:'14px 16px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13.5, fontWeight:500, color:C.rose }}>{sess.label}</div>
+              <div style={{ fontSize:11.5, color:C.textMuted, marginTop:2 }}>{typeLabel(sess.type)} · {fmt(sess.date)} · {sess.msgs.filter(m=>m.role==='user').length} messages</div>
+            </div>
+            <button onClick={()=>setExpanded(expanded===sess.id?null:sess.id)}
+              style={{ fontSize:12, padding:'4px 12px', borderRadius:8, background:expanded===sess.id?C.rose:`${C.pink}60`, color:expanded===sess.id?'#fff':C.rose, border:`0.5px solid ${expanded===sess.id?C.rose:C.border}`, cursor:'pointer' }}>
+              {expanded===sess.id?'Hide':'View'}
+            </button>
+            <button onClick={()=>deleteSession(sess.id)} title="Delete" style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:18, lineHeight:1, padding:'0 2px', opacity:0.5 }}
+              onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.5}>🗑</button>
+          </div>
+          {expanded===sess.id && (
+            <div style={{ marginTop:12, paddingTop:12, borderTop:`0.5px solid ${C.border}`, display:'flex', flexDirection:'column', gap:8, maxHeight:380, overflowY:'auto' }}>
+              {sess.msgs.map((m,i)=>(
+                <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+                  <div style={{ maxWidth:'85%', padding:'9px 13px', borderRadius:13, fontSize:12.5, lineHeight:1.6,
+                    background:m.role==='user'?C.rose:`${C.lavender}CC`, color:m.role==='user'?'#fff':C.rose,
+                    borderBottomRightRadius:m.role==='user'?3:13, borderBottomLeftRadius:m.role==='assistant'?3:13, whiteSpace:'pre-wrap',
+                  }}>{m.text.replace(/\[CMD:\{[\s\S]*?\}\]/,'').trim()}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      ))}
+    </div>
+  );
+};
+
 const SettingsPanel = ({ sub }) => {
   const [profile, setProfile] = useState(()=>JSON.parse(localStorage.getItem('nylaos_profile')||'{"name":"Nyla","bio":""}'));
   const [apiKey, setApiKey] = useState(()=>localStorage.getItem('nylaos_api_key')||'');
@@ -4513,6 +4642,7 @@ const SettingsPanel = ({ sub }) => {
     </div>
   );
 
+  if (sub==='Chat History')     return <ChatHistoryPanel />;
   if (sub==='Appearance')       return <AppearancePanel />;
   if (sub==='Notifications')    return <NotificationsPanel />;
   if (sub==='Backup & Restore') return <BackupPanel />;
@@ -4606,13 +4736,16 @@ const FloatingChat = () => {
   const [msgs, setMsgs] = useState([{role:'assistant',text:'Hi Nyla ✦ I\'m here to help — ask me anything or say "add task..." to update your dashboard directly.'}]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const sessionId = useRef(null);
   const endRef = useRef(null);
-  useEffect(()=>{ if(open) endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,open]);
+  useEffect(()=>{ if(open||fullscreen) endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,open,fullscreen]);
 
   const send = async () => {
     if (!input.trim()||loading) return;
     const apiKey=localStorage.getItem('nylaos_api_key');
     if (!apiKey) { setMsgs(m=>[...m,{role:'assistant',text:'Please add your API key in Settings → API Keys first.'}]); return; }
+    if(!sessionId.current) sessionId.current=Date.now();
     const userText=input.trim();
     const history=[...msgs,{role:'user',text:userText}];
     setMsgs(history); setInput(''); setLoading(true);
@@ -4624,12 +4757,51 @@ const FloatingChat = () => {
       });
       const data=await res.json();
       const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
-      setMsgs(m=>[...m,{role:'assistant',text:reply}]);
+      const updated=[...history,{role:'assistant',text:reply}];
+      setMsgs(updated);
       execAgentCmd(reply);
+      saveChatSession(sessionId.current,'Quick Chat','float',updated);
     } catch(e) {
       setMsgs(m=>[...m,{role:'assistant',text:'⚠️ Connection issue. Check your API key in Settings.'}]);
     } finally { setLoading(false); }
   };
+
+  const renderMsgs = () => (<>
+    {msgs.map((m,i)=>(
+      <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+        <div style={{ maxWidth:'86%', padding:'9px 13px', borderRadius:14, fontSize:12.5, lineHeight:1.65,
+          background:m.role==='user'?C.rose:`${C.lavender}CC`, color:m.role==='user'?'#fff':C.rose,
+          borderBottomRightRadius:m.role==='user'?3:14, borderBottomLeftRadius:m.role==='assistant'?3:14, whiteSpace:'pre-wrap',
+        }}>{m.text.replace(/\[CMD:\{[\s\S]*?\}\]/,'').trim()}</div>
+      </div>
+    ))}
+    {loading && <div style={{ display:'flex' }}><div style={{ padding:'9px 14px', borderRadius:14, background:`${C.lavender}CC`, borderBottomLeftRadius:3, fontSize:12.5, color:C.textLight }}>✦ thinking...</div></div>}
+    <div ref={endRef}/>
+  </>);
+
+  const renderInput = () => (
+    <div style={{ padding:'10px 12px', borderTop:`0.5px solid ${C.border}`, display:'flex', gap:8, flexShrink:0 }}>
+      <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
+        placeholder="Ask anything or give a command..."
+        style={{ flex:1, padding:'8px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12.5 }}/>
+      <button onClick={send} disabled={loading||!input.trim()} style={{ padding:'8px 14px', borderRadius:10, background:loading?C.textMuted:C.rose, color:'#fff', border:'none', fontSize:14, cursor:'pointer' }}>↑</button>
+    </div>
+  );
+
+  if (fullscreen) return (
+    <div style={{ position:'fixed', inset:0, zIndex:9999, background:C.cream, display:'flex', flexDirection:'column' }}>
+      <div style={{ padding:'12px 16px', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:9, background:C.sidebarBg, flexShrink:0 }}>
+        <div style={{ width:30,height:30,borderRadius:9,background:C.gradA,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontFamily:"'DM Serif Display',serif",fontWeight:600,color:C.rose }}>N</div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:12.5, fontWeight:500, color:C.rose }}>Nyla AI</div>
+          <div style={{ fontSize:10.5, color:C.textMuted }}>Dashboard assistant</div>
+        </div>
+        <button onClick={()=>setFullscreen(false)} style={{ background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:20,lineHeight:1 }}>✕</button>
+      </div>
+      <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8 }}>{renderMsgs()}</div>
+      {renderInput()}
+    </div>
+  );
 
   return (
     <div style={{ position:'fixed', bottom:24, right:24, zIndex:1000, display:'flex', flexDirection:'column', alignItems:'flex-end' }}>
@@ -4641,30 +4813,11 @@ const FloatingChat = () => {
               <div style={{ fontSize:12.5, fontWeight:500, color:C.rose }}>Nyla AI</div>
               <div style={{ fontSize:10.5, color:C.textMuted }}>Dashboard assistant</div>
             </div>
+            <button onClick={()=>setFullscreen(true)} title="Fullscreen" style={{ background:'none',border:`0.5px solid ${C.border}`,borderRadius:6,color:C.textMuted,cursor:'pointer',fontSize:13,padding:'2px 7px',lineHeight:1,marginRight:4 }}>⤢</button>
             <button onClick={()=>setOpen(false)} style={{ background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:20,lineHeight:1 }}>×</button>
           </div>
-          <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8 }}>
-            {msgs.map((m,i)=>(
-              <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
-                <div style={{ maxWidth:'86%', padding:'9px 13px', borderRadius:14, fontSize:12.5, lineHeight:1.65,
-                  background:m.role==='user'?C.rose:`${C.lavender}CC`, color:m.role==='user'?'#fff':C.rose,
-                  borderBottomRightRadius:m.role==='user'?3:14, borderBottomLeftRadius:m.role==='assistant'?3:14, whiteSpace:'pre-wrap',
-                }}>{m.text.replace(/\[CMD:\{[\s\S]*?\}\]/,'').trim()}</div>
-              </div>
-            ))}
-            {loading && (
-              <div style={{ display:'flex' }}>
-                <div style={{ padding:'9px 14px', borderRadius:14, background:`${C.lavender}CC`, borderBottomLeftRadius:3, fontSize:12.5, color:C.textLight }}>✦ thinking...</div>
-              </div>
-            )}
-            <div ref={endRef}/>
-          </div>
-          <div style={{ padding:'10px 12px', borderTop:`0.5px solid ${C.border}`, display:'flex', gap:8, flexShrink:0 }}>
-            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
-              placeholder="Ask anything or give a command..."
-              style={{ flex:1, padding:'8px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12.5 }}/>
-            <button onClick={send} disabled={loading||!input.trim()} style={{ padding:'8px 14px', borderRadius:10, background:loading?C.textMuted:C.rose, color:'#fff', border:'none', fontSize:14, cursor:'pointer' }}>↑</button>
-          </div>
+          <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8 }}>{renderMsgs()}</div>
+          {renderInput()}
         </div>
       )}
       <button onClick={()=>setOpen(o=>!o)} style={{
