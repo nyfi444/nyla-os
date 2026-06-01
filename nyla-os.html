@@ -677,44 +677,53 @@ const MiniMonth = ({ year, month, events=[] }) => {
 };
 
 const DayPanel = ({ dateKey, label }) => {
-  const DI_KEY = 'nylaos_day_items';
-  const [allItems, setAllItems] = useState(()=>JSON.parse(localStorage.getItem(DI_KEY)||'[]'));
+  const TASKS_KEY = 'nylaos_tasks';
+  const [allTasks, setAllTasks] = useState(()=>JSON.parse(localStorage.getItem(TASKS_KEY)||'[]'));
   const [editId, setEditId] = useState(null);
   const [editText, setEditText] = useState('');
   const [editTime, setEditTime] = useState('');
   const [newText, setNewText] = useState('');
   const [newTime, setNewTime] = useState('');
 
-  // Tasks from Tasks panel that are due on this day
-  const [linkedTasks, setLinkedTasks] = useState(()=>
-    JSON.parse(localStorage.getItem('nylaos_tasks')||'[]').filter(t=>t.calendarDate===dateKey)
-  );
-  const toggleLinkedTask = id => {
-    const all = JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
-    const updated = all.map(t=>t.id===id?{...t,done:!t.done}:t);
-    localStorage.setItem('nylaos_tasks', JSON.stringify(updated));
-    setLinkedTasks(updated.filter(t=>t.calendarDate===dateKey));
-  };
+  // One-time migration: move old nylaos_day_items into nylaos_tasks
+  useEffect(()=>{
+    const old = JSON.parse(localStorage.getItem('nylaos_day_items')||'[]');
+    if(!old.length) return;
+    const existing = JSON.parse(localStorage.getItem(TASKS_KEY)||'[]');
+    const existIds = new Set(existing.map(t=>String(t.id)));
+    const migrated = old.filter(i=>!existIds.has(String(i.id))).map(i=>({
+      id:i.id, text:i.text, done:i.done||false,
+      calendarDate:i.dateKey, time:i.time||null,
+      created:new Date().toISOString()
+    }));
+    if(migrated.length){
+      const merged = [...existing, ...migrated];
+      localStorage.setItem(TASKS_KEY, JSON.stringify(merged));
+      setAllTasks(merged);
+    }
+    localStorage.removeItem('nylaos_day_items');
+  },[]);
 
-  const saveAll = items => { setAllItems(items); localStorage.setItem(DI_KEY, JSON.stringify(items)); };
-  const dayItems = allItems.filter(i=>i.dateKey===dateKey);
-  const sorted = [...dayItems].sort((a,b)=>{
+  const saveTasks = tasks => { setAllTasks(tasks); localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); };
+
+  // All tasks (from both Calendar and Tasks panel) that belong to this day
+  const dayTasks = [...allTasks.filter(t=>t.calendarDate===dateKey)].sort((a,b)=>{
     if(!a.time && !b.time) return 0;
     if(!a.time) return 1;
     if(!b.time) return -1;
-    return a.time.localeCompare(b.time);
+    return (a.time||'').localeCompare(b.time||'');
   });
 
   const addItem = () => {
     if(!newText.trim()) return;
-    saveAll([...allItems, {id:Date.now(), dateKey, text:newText.trim(), time:newTime, done:false}]);
+    saveTasks([...allTasks,{id:Date.now(),text:newText.trim(),done:false,calendarDate:dateKey,time:newTime||null,created:new Date().toISOString()}]);
     setNewText(''); setNewTime('');
   };
-  const toggleDone = id => saveAll(allItems.map(i=>i.id===id?{...i,done:!i.done}:i));
-  const removeItem = id => saveAll(allItems.filter(i=>i.id!==id));
+  const toggleDone = id => saveTasks(allTasks.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const removeItem = id => saveTasks(allTasks.filter(t=>t.id!==id));
   const startEdit = item => { setEditId(item.id); setEditText(item.text); setEditTime(item.time||''); };
   const saveEdit = () => {
-    saveAll(allItems.map(i=>i.id===editId?{...i,text:editText.trim()||i.text,time:editTime}:i));
+    saveTasks(allTasks.map(t=>t.id===editId?{...t,text:editText.trim()||t.text,time:editTime||null}:t));
     setEditId(null);
   };
 
@@ -722,8 +731,8 @@ const DayPanel = ({ dateKey, label }) => {
     <Card style={{ marginTop:12, padding:'16px 18px' }}>
       <SectionHeading style={{ marginBottom:12 }}>{label}</SectionHeading>
       <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
-        {sorted.length===0 && <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic', padding:'4px 0' }}>Nothing yet — add something below.</div>}
-        {sorted.map(item=>(
+        {dayTasks.length===0 && <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic', padding:'4px 0' }}>Nothing yet — add something below.</div>}
+        {dayTasks.map(item=>(
           <div key={item.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderBottom:`0.5px solid ${C.border}80` }}>
             <Checkbox checked={item.done} onChange={()=>toggleDone(item.id)} size={18} />
             {editId===item.id ? (
@@ -750,20 +759,6 @@ const DayPanel = ({ dateKey, label }) => {
           </div>
         ))}
       </div>
-      {linkedTasks.length > 0 && (
-        <div style={{ marginBottom:10, paddingBottom:10, borderBottom:`0.5px solid ${C.border}` }}>
-          <div style={{ fontSize:11, color:C.textMuted, fontWeight:500, marginBottom:6 }}>FROM TASKS · {linkedTasks.filter(t=>t.done).length}/{linkedTasks.length} done</div>
-          {linkedTasks.map(t=>(
-            <div key={t.id} onClick={()=>toggleLinkedTask(t.id)}
-              style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 0', cursor:'pointer' }}>
-              <div style={{ width:16, height:16, borderRadius:5, flexShrink:0, border:`1.5px solid ${t.done?C.rose:C.accent}`, background:t.done?C.rose:'transparent', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                {t.done && <Ico d={icons.check} size={10} stroke="#fff" />}
-              </div>
-              <span style={{ fontSize:13, color:t.done?C.textMuted:C.text, textDecoration:t.done?'line-through':'none' }}>{t.text}</span>
-            </div>
-          ))}
-        </div>
-      )}
       <div style={{ display:'flex', gap:6, paddingTop:8, borderTop:`0.5px solid ${C.border}` }}>
         <input value={newText} onChange={e=>setNewText(e.target.value)}
           onKeyDown={e=>e.key==='Enter'&&addItem()} placeholder="Add item..."
