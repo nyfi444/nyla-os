@@ -830,6 +830,7 @@ const MiniMonth = ({ year, month, events=[] }) => {
 const DayPanel = ({ dateKey, label }) => {
   const TASKS_KEY = 'nylaos_tasks';
   const [allTasks, setAllTasks] = useState(()=>JSON.parse(localStorage.getItem(TASKS_KEY)||'[]'));
+  const [events, setEvents] = useState(()=>JSON.parse(localStorage.getItem('nylaos_events')||'[]'));
   const [editId, setEditId] = useState(null);
   const [editText, setEditText] = useState('');
   const [editTime, setEditTime] = useState('');
@@ -856,12 +857,18 @@ const DayPanel = ({ dateKey, label }) => {
   },[]);
 
   const saveTasks = tasks => { setAllTasks(tasks); localStorage.setItem(TASKS_KEY, JSON.stringify(tasks)); };
+  const saveEvents = evts => { setEvents(evts); localStorage.setItem('nylaos_events', JSON.stringify(evts)); };
 
-  // All tasks (from both Calendar and Tasks panel) that belong to this day
-  const dayTasks = [...allTasks.filter(t=>t.calendarDate===dateKey)].sort((a,b)=>{
-    if(!a.time && !b.time) return 0;
-    if(!a.time) return 1;
-    if(!b.time) return -1;
+  // Calendar schedule items (added directly on calendar)
+  const scheduleItems = allTasks.filter(t=>t.calendarDate===dateKey&&t.source==='calendar').sort((a,b)=>{
+    if(!a.time&&!b.time) return 0; if(!a.time) return 1; if(!b.time) return -1;
+    return (a.time||'').localeCompare(b.time||'');
+  });
+  // Plain calendar events (from nylaos_events)
+  const dayEvents = events.filter(e=>e.date===dateKey);
+  // Tasks from Tasks panel assigned to this day
+  const dayTaskItems = allTasks.filter(t=>t.calendarDate===dateKey&&t.source!=='calendar').sort((a,b)=>{
+    if(!a.time&&!b.time) return 0; if(!a.time) return 1; if(!b.time) return -1;
     return (a.time||'').localeCompare(b.time||'');
   });
 
@@ -872,19 +879,36 @@ const DayPanel = ({ dateKey, label }) => {
   };
   const toggleDone = id => saveTasks(allTasks.map(t=>t.id===id?{...t,done:!t.done}:t));
   const removeItem = id => saveTasks(allTasks.filter(t=>t.id!==id));
+  const removeEvent = id => saveEvents(events.filter(e=>e.id!==id));
   const startEdit = item => { setEditId(item.id); setEditText(item.text); setEditTime(item.time||''); };
   const saveEdit = () => {
     saveTasks(allTasks.map(t=>t.id===editId?{...t,text:editText.trim()||t.text,time:editTime||null}:t));
     setEditId(null);
   };
 
+  const sectionLabel = (text) => (
+    <div style={{ fontSize:10, fontWeight:700, color:C.textMuted, letterSpacing:0.9, textTransform:'uppercase', marginBottom:8, marginTop:4 }}>{text}</div>
+  );
+
+  const allEmpty = scheduleItems.length===0 && dayEvents.length===0 && dayTaskItems.length===0;
+
   return (
     <Card style={{ marginTop:12, padding:'16px 18px' }}>
       <SectionHeading style={{ marginBottom:12 }}>{label}</SectionHeading>
-      <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
-        {dayTasks.length===0 && <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic', padding:'4px 0' }}>Nothing yet — add something below.</div>}
-        {dayTasks.map(item=>(
-          <div key={item.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderBottom:`0.5px solid ${C.border}80` }}>
+
+      {/* ── Schedule section ── */}
+      {sectionLabel('📅 Schedule')}
+      <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:10 }}>
+        {dayEvents.map(evt=>(
+          <div key={evt.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderBottom:`0.5px solid ${C.border}60` }}>
+            <div style={{ width:7, height:7, borderRadius:'50%', background:C.rose, flexShrink:0, opacity:0.7 }}/>
+            <span style={{ flex:1, fontSize:13.5, color:C.text }}>{evt.text}</span>
+            <button onClick={()=>removeEvent(evt.id)} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:14, padding:'0 2px', opacity:0.4, lineHeight:1 }}
+              onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.4}>🗑</button>
+          </div>
+        ))}
+        {scheduleItems.map(item=>(
+          <div key={item.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderBottom:`0.5px solid ${C.border}60` }}>
             <Checkbox checked={item.done} onChange={()=>toggleDone(item.id)} size={18} />
             {editId===item.id ? (
               <>
@@ -902,21 +926,44 @@ const DayPanel = ({ dateKey, label }) => {
                   <span onClick={()=>startEdit(item)} title="Click to edit"
                     style={{ fontSize:13.5, color:item.done?C.textMuted:C.text, textDecoration:item.done?'line-through':'none', cursor:'text' }}>{item.text}</span>
                 </div>
-                <button onClick={()=>removeItem(item.id)} title="Delete"
-                  style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:14, padding:'0 2px', opacity:0.45, lineHeight:1 }}
-                  onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.45}>🗑</button>
+                <button onClick={()=>removeItem(item.id)} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:14, padding:'0 2px', opacity:0.4, lineHeight:1 }}
+                  onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.4}>🗑</button>
               </>
             )}
           </div>
         ))}
+        {dayEvents.length===0&&scheduleItems.length===0&&(
+          <div style={{ fontSize:12.5, color:C.textMuted, fontStyle:'italic', padding:'2px 0 4px' }}>No events — add one below.</div>
+        )}
       </div>
-      <div style={{ display:'flex', gap:6, paddingTop:8, borderTop:`0.5px solid ${C.border}` }}>
+      <div style={{ display:'flex', gap:6, paddingBottom:14, borderBottom:`0.5px solid ${C.border}` }}>
         <input value={newText} onChange={e=>setNewText(e.target.value)}
-          onKeyDown={e=>e.key==='Enter'&&addItem()} placeholder="Add item..."
+          onKeyDown={e=>e.key==='Enter'&&addItem()} placeholder="Add event or note..."
           style={{ flex:1, padding:'8px 11px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13, fontFamily:'inherit' }}/>
         <input type="time" value={newTime} onChange={e=>setNewTime(e.target.value)}
           style={{ width:90, padding:'8px 7px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12 }}/>
         <button onClick={addItem} style={{ padding:'8px 20px', borderRadius:9, background:C.rose, color:'#fff', border:'none', fontSize:18, cursor:'pointer', lineHeight:1 }}>+</button>
+      </div>
+
+      {/* ── Tasks section ── */}
+      <div style={{ marginTop:14 }}>
+        {sectionLabel('✅ Tasks')}
+        {dayTaskItems.length===0 ? (
+          <div style={{ fontSize:12.5, color:C.textMuted, fontStyle:'italic', padding:'2px 0' }}>No tasks scheduled for this day. Assign tasks a date in the Tasks section.</div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            {dayTaskItems.map(task=>(
+              <div key={task.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderBottom:`0.5px solid ${C.border}60` }}>
+                <Checkbox checked={task.done} onChange={()=>toggleDone(task.id)} size={18} />
+                <div style={{ flex:1 }}>
+                  {task.time && <span style={{ fontSize:11, color:C.textMuted, marginRight:7 }}>{task.time}</span>}
+                  <span style={{ fontSize:13.5, color:task.done?C.textMuted:C.text, textDecoration:task.done?'line-through':'none' }}>{task.text}</span>
+                </div>
+                {task.goalId && <span style={{ fontSize:10, color:C.accent, padding:'1px 6px', borderRadius:8, background:`${C.lavender}50`, flexShrink:0 }}>goal</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Card>
   );
