@@ -1584,7 +1584,21 @@ const NotebookPanel = ({ sub }) => {
       const name = file.name.replace(/\.[^/.]+$/, '');
       let content = '';
       if (file.type === 'application/pdf') {
-        content = `<p><em>📄 PDF uploaded: <strong>${file.name}</strong></em></p><p>PDF text cannot be extracted automatically — paste your content below:</p><p><br></p>`;
+        try {
+          const dataUrl = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload = e => res(e.target.result);
+            r.onerror = rej;
+            r.readAsDataURL(file);
+          });
+          if (file.size > 6 * 1024 * 1024) {
+            content = `<p><em>📄 <strong>${file.name}</strong> is too large to embed (${(file.size/1024/1024).toFixed(1)} MB). Paste the content below instead.</em></p><p><br></p>`;
+          } else {
+            content = `<div contenteditable="false" style="margin:12px 0;user-select:none"><p style="font-size:12px;color:#9c7090;margin:0 0 6px 0">📄 ${file.name}</p><iframe src="${dataUrl}" width="100%" height="720" style="border:none;border-radius:10px;display:block;box-shadow:0 2px 12px rgba(0,0,0,0.08)"></iframe></div><p><br></p>`;
+          }
+        } catch(e) {
+          content = `<p><em>📄 PDF uploaded: <strong>${file.name}</strong></em></p><p>Could not load — paste your content below:</p><p><br></p>`;
+        }
       } else {
         try {
           const text = await file.text();
