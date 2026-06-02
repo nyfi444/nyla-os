@@ -1541,6 +1541,8 @@ const NotebookPanel = ({ sub }) => {
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [expandedFids, setExpandedFids] = useState(()=>new Set([1,2,3,4]));
   const [hoverFid, setHoverFid] = useState(null);
+  const [hoverPid, setHoverPid] = useState(null);
+  const [moveMenuPid, setMoveMenuPid] = useState(null);
   const [showGraph, setShowGraph] = useState(false);
   const [tagFilter, setTagFilter] = useState('');
   const [searchQ, setSearchQ] = useState('');
@@ -1653,6 +1655,12 @@ const NotebookPanel = ({ sub }) => {
     if(pg) addToTrash('notebook_page',pg.name,pg,'nylaos_nb_pages');
     savePages(pages.filter(p=>p.id!==id));
     if(activePid===id){ setActivePid(null); setHeaderEditing(false); }
+  };
+
+  const movePage = (pageId, targetFolderId) => {
+    savePages(pages.map(p=>p.id===pageId?{...p,folderId:targetFolderId}:p));
+    setMoveMenuPid(null);
+    setExpandedFids(s=>{ const ns=new Set(s); ns.add(targetFolderId); return ns; });
   };
 
   const deleteFolder = id => {
@@ -1832,8 +1840,11 @@ const NotebookPanel = ({ sub }) => {
           {displayPages.map(p=>{
             const dAgo=Math.floor((Date.now()-new Date(p.updated||p.created).getTime())/86400000);
             const when=dAgo===0?'today':dAgo===1?'yesterday':`${dAgo}d ago`;
+            const isHovered=hoverPid===p.id;
+            const moveFolders=folders.filter(f=>f.id!==p.folderId);
             return (
-              <div key={p.id} style={{display:'flex',alignItems:'center',gap:2,marginBottom:1}}>
+              <div key={p.id} style={{display:'flex',alignItems:'center',gap:2,marginBottom:1,position:'relative'}}
+                onMouseEnter={()=>setHoverPid(p.id)} onMouseLeave={()=>{setHoverPid(null);setMoveMenuPid(null);}}>
                 {editingPgId===p.id?(
                   <input autoFocus value={editingPgName} onChange={e=>setEditingPgName(e.target.value)}
                     onKeyDown={e=>{if(e.key==='Enter')savePgName(p.id,editingPgName);if(e.key==='Escape')setEditingPgId(null);}}
@@ -1846,8 +1857,29 @@ const NotebookPanel = ({ sub }) => {
                     <div style={{fontSize:9.5,color:C.textMuted,marginTop:1}}>{when}</div>
                   </button>
                 )}
-                <button onClick={()=>deletePage(p.id)} style={{background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:13,flexShrink:0,opacity:0.4,lineHeight:1}}
-                  onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.4}>×</button>
+                {isHovered&&!editingPgId&&(<>
+                  <button onClick={e=>{e.stopPropagation();setMoveMenuPid(moveMenuPid===p.id?null:p.id);}} title="Move to folder"
+                    style={{background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:11,flexShrink:0,lineHeight:1,padding:'1px 2px'}}
+                    onMouseEnter={e=>e.currentTarget.style.color=C.rose} onMouseLeave={e=>e.currentTarget.style.color=C.textMuted}>📁</button>
+                  <button onClick={()=>deletePage(p.id)} title="Delete page"
+                    style={{background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:12,flexShrink:0,lineHeight:1,padding:'1px 2px'}}
+                    onMouseEnter={e=>e.currentTarget.style.color='#e04060'} onMouseLeave={e=>e.currentTarget.style.color=C.textMuted}>🗑</button>
+                </>)}
+                {moveMenuPid===p.id&&(
+                  <div style={{position:'absolute',right:0,top:'100%',zIndex:200,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:10,padding:'5px 0',boxShadow:`0 6px 20px ${C.pink}60`,minWidth:160}}
+                    onMouseLeave={()=>setMoveMenuPid(null)}>
+                    <div style={{fontSize:10,color:C.textMuted,padding:'3px 12px 5px',letterSpacing:0.5,textTransform:'uppercase',fontWeight:600}}>Move to</div>
+                    {moveFolders.map(f=>(
+                      <button key={f.id} onClick={()=>movePage(p.id,f.id)}
+                        style={{width:'100%',padding:'6px 12px',background:'none',border:'none',textAlign:'left',fontSize:12,color:C.text,cursor:'pointer',display:'flex',alignItems:'center',gap:7}}
+                        onMouseEnter={e=>e.currentTarget.style.background=C.pinkLight}
+                        onMouseLeave={e=>e.currentTarget.style.background='none'}>
+                        <span>{f.icon||'📁'}</span><span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name}</span>
+                      </button>
+                    ))}
+                    {moveFolders.length===0&&<div style={{padding:'6px 12px',fontSize:11.5,color:C.textMuted,fontStyle:'italic'}}>No other folders</div>}
+                  </div>
+                )}
               </div>
             );
           })}
