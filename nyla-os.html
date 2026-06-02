@@ -1623,6 +1623,21 @@ const NotebookPanel = ({ sub }) => {
     if(activePid===id){ setActivePid(null); setHeaderEditing(false); }
   };
 
+  const deleteFolder = id => {
+    const folder = folders.find(f=>f.id===id);
+    if (!folder) return;
+    const allFids = [id, ...getDescFids(id)];
+    const affectedPages = pages.filter(p=>allFids.includes(p.folderId));
+    const msg = affectedPages.length > 0
+      ? `Delete "${folder.name}" and its ${affectedPages.length} note${affectedPages.length!==1?'s':''}? This cannot be undone.`
+      : `Delete folder "${folder.name}"?`;
+    if (!window.confirm(msg)) return;
+    saveFolders(folders.filter(f=>!allFids.includes(f.id)));
+    savePages(pages.filter(p=>!allFids.includes(p.folderId)));
+    if (allFids.includes(activeFid)) setActiveFid(1);
+    if (affectedPages.some(p=>p.id===activePid)) { setActivePid(null); setHeaderEditing(false); }
+  };
+
   const addFolder = () => {
     if(!newFolderName.trim()) return;
     const f={id:Date.now(),name:newFolderName.trim(),icon:'📁',parentId:newFolderParentId};
@@ -1726,7 +1741,15 @@ const NotebookPanel = ({ sub }) => {
                     style:{background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:13,padding:'0 3px',flexShrink:0,lineHeight:1},
                     onMouseEnter:e=>e.currentTarget.style.color=C.rose,
                     onMouseLeave:e=>e.currentTarget.style.color=C.textMuted
-                  },'+')
+                  },'+'),
+                  /* delete folder btn (hover, not All Notes) */
+                  hoverFid===folder.id&&folder.id!==1&&React.createElement('button',{
+                    onClick:()=>deleteFolder(folder.id),
+                    title:'Delete folder',
+                    style:{background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:12,padding:'0 3px',flexShrink:0,lineHeight:1},
+                    onMouseEnter:e=>e.currentTarget.style.color='#e05',
+                    onMouseLeave:e=>e.currentTarget.style.color=C.textMuted
+                  },'🗑')
                 ),
                 /* inline subfolder input */
                 showNewFolder&&newFolderParentId===folder.id&&React.createElement('div',{
