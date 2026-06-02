@@ -1323,6 +1323,45 @@ const SimpleEditor = ({ sub }) => {
   );
 };
 
+/* ── PDF IndexedDB Storage ──────────────────────────────────────── */
+const pdfDb = (() => {
+  let _db = null;
+  const open = () => new Promise((res, rej) => {
+    if (_db) return res(_db);
+    const req = indexedDB.open('nylaos_pdf_store', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('pdfs');
+    req.onsuccess = e => { _db = e.target.result; res(_db); };
+    req.onerror = rej;
+  });
+  return {
+    save: async (key, blob) => {
+      const d = await open();
+      return new Promise((res, rej) => { const tx=d.transaction('pdfs','readwrite'); tx.objectStore('pdfs').put(blob,key); tx.oncomplete=res; tx.onerror=rej; });
+    },
+    load: async (key) => {
+      const d = await open();
+      return new Promise((res, rej) => { const req=d.transaction('pdfs','readonly').objectStore('pdfs').get(key); req.onsuccess=e=>res(e.target.result); req.onerror=rej; });
+    },
+  };
+})();
+
+const loadPdfsInElement = async (el) => {
+  const refs = el.querySelectorAll('[data-pdf-key]');
+  for (const ref of refs) {
+    const key = ref.getAttribute('data-pdf-key');
+    const name = ref.getAttribute('data-pdf-name') || 'PDF';
+    try {
+      const blob = await pdfDb.load(key);
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        ref.innerHTML = `<p style="font-size:12px;color:#9c7090;margin:0 0 6px 0;padding:0">📄 ${name}</p><iframe src="${url}" width="100%" height="720" style="border:none;border-radius:10px;display:block;box-shadow:0 2px 12px rgba(0,0,0,0.08)"></iframe>`;
+      } else {
+        ref.innerHTML = `<p style="font-size:12px;color:#c4607a;margin:0">📄 ${name} — PDF not found. Please re-upload.</p>`;
+      }
+    } catch(e) { console.error('PDF load error', e); }
+  }
+};
+
 /* ── Rich Text Editor (module-level to avoid remount) ───────────── */
 const RichEditorComponent = ({ pageId, initialContent, onUpdate, onMount }) => {
   const ref = useRef(null);
@@ -1331,6 +1370,7 @@ const RichEditorComponent = ({ pageId, initialContent, onUpdate, onMount }) => {
       ref.current.innerHTML = initialContent || '<p><br></p>';
       onMount(ref.current);
       ref.current.focus();
+      loadPdfsInElement(ref.current);
     }
   }, []);
   return (
@@ -1585,19 +1625,11 @@ const NotebookPanel = ({ sub }) => {
       let content = '';
       if (file.type === 'application/pdf') {
         try {
-          const dataUrl = await new Promise((res, rej) => {
-            const r = new FileReader();
-            r.onload = e => res(e.target.result);
-            r.onerror = rej;
-            r.readAsDataURL(file);
-          });
-          if (file.size > 6 * 1024 * 1024) {
-            content = `<p><em>📄 <strong>${file.name}</strong> is too large to embed (${(file.size/1024/1024).toFixed(1)} MB). Paste the content below instead.</em></p><p><br></p>`;
-          } else {
-            content = `<div contenteditable="false" style="margin:12px 0;user-select:none"><p style="font-size:12px;color:#9c7090;margin:0 0 6px 0">📄 ${file.name}</p><iframe src="${dataUrl}" width="100%" height="720" style="border:none;border-radius:10px;display:block;box-shadow:0 2px 12px rgba(0,0,0,0.08)"></iframe></div><p><br></p>`;
-          }
+          const pdfKey = `pdf_${Date.now()}_${i}`;
+          await pdfDb.save(pdfKey, file);
+          content = `<div contenteditable="false" data-pdf-key="${pdfKey}" data-pdf-name="${file.name}" style="margin:12px 0;user-select:none;border-radius:10px;overflow:hidden;border:0.5px solid #f0d0dc"><div style="padding:8px 14px;background:#faf5f8;font-size:12px;color:#9c7090">📄 ${file.name} — loading...</div></div><p><br></p>`;
         } catch(e) {
-          content = `<p><em>📄 PDF uploaded: <strong>${file.name}</strong></em></p><p>Could not load — paste your content below:</p><p><br></p>`;
+          content = `<p><em>📄 Could not save PDF: <strong>${file.name}</strong></em></p><p><br></p>`;
         }
       } else {
         try {
