@@ -243,6 +243,7 @@ const NAV = [
 ];
 
 /* ── Constants ──────────────────────────────────────────────────── */
+const toDateKey = (d) => { const dt=d||new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
 const MONTHS  = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const MONTHS3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAYS    = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -866,8 +867,10 @@ const DayPanel = ({ dateKey, label }) => {
   });
   // Plain calendar events (from nylaos_events)
   const dayEvents = events.filter(e=>e.date===dateKey);
-  // Tasks from Tasks panel assigned to this day
-  const dayTaskItems = allTasks.filter(t=>t.calendarDate===dateKey&&t.source!=='calendar').sort((a,b)=>{
+  // Tasks from Tasks panel: assigned to this day OR completed on this day
+  const dayTaskItems = allTasks.filter(t=>
+    t.source!=='calendar' && (t.calendarDate===dateKey || t.completedDate===dateKey)
+  ).sort((a,b)=>{
     if(!a.time&&!b.time) return 0; if(!a.time) return 1; if(!b.time) return -1;
     return (a.time||'').localeCompare(b.time||'');
   });
@@ -877,7 +880,10 @@ const DayPanel = ({ dateKey, label }) => {
     saveTasks([...allTasks,{id:Date.now(),text:newText.trim(),done:false,calendarDate:dateKey,time:newTime||null,source:'calendar',created:new Date().toISOString()}]);
     setNewText(''); setNewTime('');
   };
-  const toggleDone = id => saveTasks(allTasks.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const toggleDone = id => {
+    const nowDone = !allTasks.find(t=>t.id===id)?.done;
+    saveTasks(allTasks.map(t=>t.id===id?{...t,done:nowDone,completedDate:nowDone?dateKey:null}:t));
+  };
   const removeItem = id => saveTasks(allTasks.filter(t=>t.id!==id));
   const removeEvent = id => saveEvents(events.filter(e=>e.id!==id));
   const startEdit = item => { setEditId(item.id); setEditText(item.text); setEditTime(item.time||''); };
@@ -952,12 +958,15 @@ const DayPanel = ({ dateKey, label }) => {
           <div style={{ fontSize:12.5, color:C.textMuted, fontStyle:'italic', padding:'2px 0' }}>No tasks scheduled for this day. Assign tasks a date in the Tasks section.</div>
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-            {dayTaskItems.map(task=>(
+            {[...dayTaskItems].sort((a,b)=>(a.done===b.done?0:a.done?1:-1)).map(task=>(
               <div key={task.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0', borderBottom:`0.5px solid ${C.border}60` }}>
                 <Checkbox checked={task.done} onChange={()=>toggleDone(task.id)} size={18} />
                 <div style={{ flex:1 }}>
                   {task.time && <span style={{ fontSize:11, color:C.textMuted, marginRight:7 }}>{task.time}</span>}
                   <span style={{ fontSize:13.5, color:task.done?C.textMuted:C.text, textDecoration:task.done?'line-through':'none' }}>{task.text}</span>
+                  {task.done && task.completedDate && task.completedDate!==task.calendarDate && (
+                    <span style={{ fontSize:10, color:C.textMuted, marginLeft:6 }}>completed {task.completedDate}</span>
+                  )}
                 </div>
                 {task.goalId && <span style={{ fontSize:10, color:C.accent, padding:'1px 6px', borderRadius:8, background:`${C.lavender}50`, flexShrink:0 }}>goal</span>}
               </div>
@@ -1223,7 +1232,7 @@ const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
     save([...tasks,{id:Date.now(),text:input.trim(),done:false,created:new Date().toISOString()}]);
     setInput('');
   };
-  const toggle = id => save(tasks.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const toggle = id => { const nowDone=!tasks.find(t=>t.id===id)?.done; save(tasks.map(t=>t.id===id?{...t,done:nowDone,completedDate:nowDone?toDateKey():null}:t)); };
   const remove = id => {
     const t = tasks.find(x=>x.id===id);
     if (t) addToTrash('task', t.text, t, storageKey);
@@ -3631,7 +3640,8 @@ const GoalsPanel = ({ sub }) => {
 
   const [allTasks, setAllTasks] = useState(()=>JSON.parse(localStorage.getItem('nylaos_tasks')||'[]'));
   const toggleGoalTask = (taskId) => {
-    const updated = allTasks.map(t=>t.id===taskId?{...t,done:!t.done}:t);
+    const nowDone = !allTasks.find(t=>t.id===taskId)?.done;
+    const updated = allTasks.map(t=>t.id===taskId?{...t,done:nowDone,completedDate:nowDone?toDateKey():null}:t);
     setAllTasks(updated);
     localStorage.setItem('nylaos_tasks', JSON.stringify(updated));
     // Auto-update goal progress based on linked task completion
