@@ -71,7 +71,7 @@ const useSyncStatus=()=>{
   return s;
 };
 
-async function _cloudLoad(){
+async function _cloudLoad(forceLoad=false){
   if(!_fbUser||!_fbDb) return;
   _setSyncState({status:'syncing',user:_fbUser});
   try{
@@ -79,7 +79,7 @@ async function _cloudLoad(){
     if(doc.exists){
       const {snapshot,savedAt}=doc.data();
       const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
-      if(savedAt>localTs&&snapshot){
+      if(snapshot&&(forceLoad||savedAt>localTs)){
         const data=JSON.parse(snapshot);
         Object.entries(data).forEach(([k,v])=>{
           if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
@@ -128,6 +128,7 @@ async function signInWithGoogle(){
 async function fbSignOut(){if(_fbAuth)await _fbAuth.signOut();}
 
 // Boot Firebase if config is provided
+let _cloudListener=null;
 (function(){
   if(!FB_CONFIG.apiKey||typeof firebase==='undefined') return;
   try{
@@ -136,8 +137,30 @@ async function fbSignOut(){if(_fbAuth)await _fbAuth.signOut();}
     _fbDb=firebase.firestore();
     _fbAuth.onAuthStateChanged(user=>{
       _fbUser=user;
-      if(user) _cloudLoad();
-      else _setSyncState({status:'idle',user:null});
+      // Tear down old real-time listener
+      if(_cloudListener){_cloudListener();_cloudListener=null;}
+      if(user){
+        // Force-load latest cloud data immediately on sign-in
+        _cloudLoad(true);
+        // Real-time listener: fires whenever another device saves
+        _cloudListener=_fbDb.collection('nylaos').doc(user.uid).onSnapshot(doc=>{
+          if(doc.metadata.hasPendingWrites) return; // ignore our own writes
+          if(!doc.exists) return;
+          const {snapshot,savedAt}=doc.data();
+          const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
+          if(snapshot&&savedAt>localTs){
+            const data=JSON.parse(snapshot);
+            Object.entries(data).forEach(([k,v])=>{
+              if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
+            });
+            _rawLS('nylaos_cloud_ts',String(savedAt));
+            _setSyncState({status:'synced',user});
+            window.location.reload();
+          }
+        },err=>console.warn('Cloud listener:',err));
+      } else {
+        _setSyncState({status:'idle',user:null});
+      }
     });
   }catch(e){console.warn('Firebase init:',e);}
 })();
@@ -414,7 +437,10 @@ const SyncButton = () => {
               <div style={{fontSize:13,color:C.text,fontWeight:500,marginBottom:16,wordBreak:'break-all'}}>{sync.user.email}</div>
               <button onClick={()=>{cloudSave();setOpen(false);}}
                 style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
-                  border:'none',cursor:'pointer',fontSize:13,marginBottom:8}}>Sync now ↑</button>
+                  border:'none',cursor:'pointer',fontSize:13,marginBottom:6}}>↑ Push — save to cloud</button>
+              <button onClick={()=>{_cloudLoad(true);setOpen(false);}}
+                style={{width:'100%',padding:'9px',borderRadius:9,background:`${C.lavender}90`,color:C.rose,
+                  border:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:13,marginBottom:6}}>↓ Pull — load from cloud</button>
               <button onClick={()=>{fbSignOut();setOpen(false);}}
                 style={{width:'100%',padding:'9px',borderRadius:9,background:`${C.pink}80`,
                   color:C.rose,border:'none',cursor:'pointer',fontSize:13}}>Sign out</button>
