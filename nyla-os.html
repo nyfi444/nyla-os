@@ -79,7 +79,8 @@ async function _cloudLoad(forceLoad=false){
     if(doc.exists){
       const {snapshot,savedAt}=doc.data();
       const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
-      if(snapshot&&(forceLoad||savedAt>localTs)){
+      // Only reload when cloud data is actually newer — prevents infinite reload loop on sign-in
+      if(snapshot&&savedAt>localTs){
         const data=JSON.parse(snapshot);
         Object.entries(data).forEach(([k,v])=>{
           if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
@@ -4175,9 +4176,9 @@ const AgentsChat = () => {
           'anthropic-dangerous-direct-browser-access':'true',
         },
         body: JSON.stringify({
-          model:'claude-sonnet-4-6',
+          model:'claude-sonnet-4-5',
           max_tokens:1024,
-          system: SYSTEM_PROMPT,
+          system: FLOAT_SYSTEM,
           messages: history.map(m=>({ role:m.role, content:m.text })),
         }),
       });
