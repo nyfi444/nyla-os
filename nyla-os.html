@@ -1843,144 +1843,225 @@ const NotebookPanel = ({ sub }) => {
   const saveHeaderTitle = () => { if(!activePid) return; const n=headerTitle.trim()||'Untitled'; savePages(pages.map(p=>p.id===activePid?{...p,name:n}:p)); setHeaderEditing(false); };
 
   const pdfStyles = `
-    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Jost:wght@300;400;500&display=swap');
     *, *::before, *::after { box-sizing: border-box; }
-    @page { margin: 0.85in 1in; }
+    @page { margin: 0; size: A4; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
     @media print { body { margin: 0; } .no-print { display: none !important; } }
+
     body {
-      font-family: 'DM Sans', Georgia, serif;
-      max-width: 680px;
-      margin: 0 auto;
-      padding: 48px 0 80px;
-      line-height: 1.85;
-      color: #2a1a24;
-      background: #fff;
-      font-size: 14.5px;
-    }
-    .nyla-cover {
-      margin-bottom: 40px;
-      padding-bottom: 24px;
-      border-bottom: 1.5px solid #f0d0dc;
-    }
-    .nyla-notebook-label {
-      font-family: 'DM Sans', sans-serif;
-      font-size: 10px;
-      font-weight: 500;
-      letter-spacing: 2.5px;
-      text-transform: uppercase;
-      color: #c4a0b4;
-      margin: 0 0 10px;
-    }
-    .nyla-page-title {
-      font-family: 'DM Serif Display', Georgia, serif;
-      font-size: 32px;
-      color: #c4607a;
-      margin: 0 0 8px;
-      line-height: 1.2;
-      font-weight: 400;
-    }
-    .nyla-meta {
-      font-size: 11.5px;
-      color: #b89aab;
+      font-family: 'Jost', 'Georgia', serif;
       margin: 0;
-      display: flex;
-      gap: 16px;
-      align-items: center;
-    }
-    .nyla-meta span::before { content: '·'; margin-right: 6px; color: #e8c0ce; }
-    .nyla-meta span:first-child::before { display: none; }
-    .nyla-body {
+      padding: 0;
+      color: #1e0e18;
+      background: #fff;
+      font-size: 13px;
       line-height: 1.9;
     }
-    .nyla-body h1 {
-      font-family: 'DM Serif Display', Georgia, serif;
-      font-size: 26px;
+
+    /* ── accent bar across the top of every page ── */
+    body::before {
+      content: '';
+      display: block;
+      height: 5px;
+      background: linear-gradient(90deg, #c4607a 0%, #d4a0b8 50%, #a080c8 100%);
+    }
+
+    .nyla-page {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 52px 0 72px;
+    }
+
+    /* ── header block ── */
+    .nyla-cover {
+      margin-bottom: 44px;
+      padding-bottom: 28px;
+      position: relative;
+    }
+    .nyla-cover::after {
+      content: '';
+      display: block;
+      margin-top: 28px;
+      height: 1px;
+      background: linear-gradient(90deg, #c4607a44 0%, #c4607a22 60%, transparent 100%);
+    }
+    .nyla-notebook-label {
+      font-family: 'Jost', sans-serif;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 3px;
+      text-transform: uppercase;
       color: #c4607a;
-      font-weight: 400;
-      margin: 32px 0 10px;
-      border-bottom: 1px solid #f5e0ea;
-      padding-bottom: 6px;
+      margin: 0 0 14px;
+      opacity: 0.75;
     }
-    .nyla-body h2 {
-      font-family: 'DM Serif Display', Georgia, serif;
-      font-size: 20px;
-      color: #a03c5a;
-      font-weight: 400;
-      margin: 28px 0 8px;
+    .nyla-page-title {
+      font-family: 'Cormorant Garamond', Georgia, serif;
+      font-size: 38px;
+      color: #1e0e18;
+      margin: 0 0 12px;
+      line-height: 1.15;
+      font-weight: 300;
+      letter-spacing: -0.5px;
     }
-    .nyla-body h3 {
-      font-size: 15px;
-      font-weight: 600;
-      color: #7a3a56;
-      margin: 22px 0 6px;
+    .nyla-meta {
+      font-size: 10.5px;
+      color: #a08090;
+      margin: 0;
+      display: flex;
+      gap: 18px;
+      align-items: center;
       letter-spacing: 0.3px;
     }
-    .nyla-body p { margin: 0 0 12px; }
-    .nyla-body ul, .nyla-body ol { padding-left: 22px; margin: 8px 0 14px; }
-    .nyla-body li { margin-bottom: 5px; }
-    .nyla-body blockquote {
-      margin: 18px 0;
-      padding: 12px 20px;
-      border-left: 3px solid #e8b0c4;
-      background: #fff8fb;
-      color: #7a4060;
+    .nyla-meta-dot { color: #e0b8c8; margin: 0 2px; }
+
+    /* ── body copy ── */
+    .nyla-body { line-height: 1.95; color: #1e0e18; }
+
+    .nyla-body h1 {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 26px;
+      color: #1e0e18;
+      font-weight: 400;
+      margin: 40px 0 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e8c8d4;
+      letter-spacing: -0.3px;
+    }
+    .nyla-body h2 {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 20px;
+      color: #3a1828;
+      font-weight: 400;
+      margin: 32px 0 10px;
       font-style: italic;
-      border-radius: 0 8px 8px 0;
+    }
+    .nyla-body h3 {
+      font-family: 'Jost', sans-serif;
+      font-size: 11px;
+      font-weight: 500;
+      color: #c4607a;
+      margin: 26px 0 8px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    .nyla-body p { margin: 0 0 14px; }
+    .nyla-body ul, .nyla-body ol { padding-left: 20px; margin: 8px 0 16px; }
+    .nyla-body li { margin-bottom: 6px; }
+    .nyla-body li::marker { color: #c4607a; }
+
+    .nyla-body blockquote {
+      margin: 24px 0;
+      padding: 16px 24px;
+      border-left: 2px solid #c4607a;
+      color: #5a2a40;
+      font-style: italic;
+      font-size: 14.5px;
+      font-family: 'Cormorant Garamond', serif;
+      background: #fdf5f8;
     }
     .nyla-body code {
-      background: #fff0f5;
-      border: 0.5px solid #f0d0dc;
-      border-radius: 4px;
+      background: #fdf0f5;
+      border: 1px solid #f0d0dc;
+      border-radius: 3px;
       padding: 1px 5px;
-      font-size: 12.5px;
+      font-size: 12px;
       color: #a03c5a;
       font-family: 'Courier New', monospace;
     }
     .nyla-body pre {
-      background: #fff0f5;
-      border: 0.5px solid #f0d0dc;
-      border-radius: 8px;
-      padding: 14px 18px;
-      overflow-x: auto;
-      font-size: 12.5px;
+      background: #fdf0f5;
+      border: 1px solid #ecc8d8;
+      border-radius: 6px;
+      padding: 16px 20px;
+      font-size: 11.5px;
+      margin: 16px 0;
     }
     .nyla-body hr {
       border: none;
-      border-top: 1px solid #f0d8e4;
-      margin: 28px 0;
+      margin: 36px 0;
+      text-align: center;
     }
-    .nyla-body table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13.5px;
-      margin: 16px 0;
+    .nyla-body hr::after {
+      content: '✦  ✦  ✦';
+      font-size: 10px;
+      color: #d4a0b8;
+      letter-spacing: 6px;
     }
+    .nyla-body table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 18px 0; }
     .nyla-body th {
-      background: #fdf0f5;
-      color: #a03c5a;
-      font-weight: 600;
-      padding: 8px 12px;
-      border: 0.5px solid #f0d0dc;
+      background: #faf0f5;
+      color: #7a3050;
+      font-weight: 500;
+      padding: 9px 13px;
+      border-bottom: 1.5px solid #e0b0c8;
       text-align: left;
-      font-size: 12px;
-      letter-spacing: 0.5px;
+      font-size: 10.5px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      font-family: 'Jost', sans-serif;
     }
     .nyla-body td {
-      padding: 7px 12px;
-      border: 0.5px solid #f5e4ec;
+      padding: 8px 13px;
+      border-bottom: 1px solid #f0e0e8;
       vertical-align: top;
     }
-    .nyla-body tr:nth-child(even) td { background: #fffafc; }
+
+    /* ── footer ── */
     .nyla-footer {
-      margin-top: 60px;
-      padding-top: 16px;
-      border-top: 1px solid #f0d8e4;
-      font-size: 10.5px;
-      color: #c4a0b4;
+      margin-top: 64px;
+      padding-top: 14px;
+      border-top: 1px solid #ecd4e0;
+      font-size: 9.5px;
+      color: #c0a0b0;
       display: flex;
       justify-content: space-between;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      font-family: 'Jost', sans-serif;
     }
-    /* page break between notebook sections */
+
+    /* ── notebook cover page ── */
+    .nyla-cover-page {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 80px 0;
+    }
+    .nyla-cover-page .eyebrow {
+      font-family: 'Jost', sans-serif;
+      font-size: 9px;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: #c4607a;
+      margin-bottom: 24px;
+    }
+    .nyla-cover-page .big-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 62px;
+      color: #1e0e18;
+      font-weight: 300;
+      line-height: 1.1;
+      margin: 0 0 28px;
+      letter-spacing: -1px;
+    }
+    .nyla-cover-page .sub {
+      font-family: 'Jost', sans-serif;
+      font-size: 11px;
+      color: #a08090;
+      letter-spacing: 0.5px;
+    }
+    .nyla-cover-page .rule {
+      width: 48px;
+      height: 2px;
+      background: #c4607a;
+      margin: 28px 0;
+    }
+
     .nyla-page-break { page-break-after: always; break-after: page; }
   `;
 
@@ -1989,15 +2070,21 @@ const NotebookPanel = ({ sub }) => {
     const wc = stripHtml(page.content||'').split(/\s+/).filter(Boolean).length;
     const pageBreak = (idx < total - 1) ? '<div class="nyla-page-break"></div>' : '';
     return `
-      <div class="nyla-cover">
-        <p class="nyla-notebook-label">${folder?.name||'Notebook'}</p>
-        <h1 class="nyla-page-title">${page.name}</h1>
-        <p class="nyla-meta"><span>${dateStr}</span><span>${wc} words</span></p>
-      </div>
-      <div class="nyla-body">${page.content||'<p style="color:#c4a0b4;font-style:italic;">No content.</p>'}</div>
-      <div class="nyla-footer">
-        <span>${folder?.name||'Notebook'} · ${page.name}</span>
-        <span>nyla os</span>
+      <div class="nyla-page">
+        <div class="nyla-cover">
+          <p class="nyla-notebook-label">${folder?.name||'Notebook'}</p>
+          <h1 class="nyla-page-title">${page.name}</h1>
+          <p class="nyla-meta">
+            <span>${dateStr}</span>
+            <span class="nyla-meta-dot">·</span>
+            <span>${wc} words</span>
+          </p>
+        </div>
+        <div class="nyla-body">${page.content||'<p style="color:#c0a0b0;font-style:italic;font-family:\'Cormorant Garamond\',serif;">No content yet.</p>'}</div>
+        <div class="nyla-footer">
+          <span>${folder?.name||'Notebook'} · ${page.name}</span>
+          <span>nyla os</span>
+        </div>
       </div>
       ${pageBreak}
     `;
@@ -2020,10 +2107,11 @@ const NotebookPanel = ({ sub }) => {
     const notebookTitle = folder?.name || 'Notebook';
     const today = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
     const coverHtml = `
-      <div style="min-height:80vh;display:flex;flex-direction:column;justify-content:center;padding:0 0 60px;">
-        <p style="font-family:'DM Sans',sans-serif;font-size:10px;font-weight:500;letter-spacing:2.5px;text-transform:uppercase;color:#c4a0b4;margin:0 0 20px;">nyla os · notebook export</p>
-        <h1 style="font-family:'DM Serif Display',Georgia,serif;font-size:52px;color:#c4607a;margin:0 0 16px;font-weight:400;line-height:1.15;">${notebookTitle}</h1>
-        <p style="font-size:13px;color:#b89aab;margin:0;">${today} · ${notebookPages.length} page${notebookPages.length!==1?'s':''}</p>
+      <div class="nyla-cover-page">
+        <p class="eyebrow">nyla os · notebook</p>
+        <div class="rule"></div>
+        <h1 class="big-title">${notebookTitle}</h1>
+        <p class="sub">${today} &nbsp;·&nbsp; ${notebookPages.length} page${notebookPages.length!==1?'s':''}</p>
       </div>
       <div class="nyla-page-break"></div>
     `;
@@ -2253,8 +2341,14 @@ const NotebookPanel = ({ sub }) => {
               )}
               <span style={{fontSize:10.5,color:C.textMuted,flexShrink:0}}>{wc} words</span>
               {tags.map(t=><span key={t} onClick={()=>setTagFilter(tagFilter===t?'':t)} style={{fontSize:10.5,padding:'2px 8px',borderRadius:10,background:`${C.lavender}70`,color:C.accent,cursor:'pointer',flexShrink:0}}>{t}</span>)}
-              <button onClick={exportPDF} style={{padding:'4px 11px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0}}>Export Page</button>
-              <button onClick={exportNotebookPDF} style={{padding:'4px 11px',borderRadius:8,background:`${C.rose}18`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0}}>Export Notebook</button>
+              <button onClick={exportPDF} title="Print / Export this page as PDF" style={{padding:'4px 11px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                Page
+              </button>
+              <button onClick={exportNotebookPDF} title="Print / Export entire notebook as PDF" style={{padding:'4px 11px',borderRadius:8,background:`${C.rose}18`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                Notebook
+              </button>
             </div>
 
             {/* Formatting toolbar */}
