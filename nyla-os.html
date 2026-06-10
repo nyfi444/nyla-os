@@ -1472,136 +1472,204 @@ const nbDescFids = (folders, fid) => {
 };
 
 /* ── Note Graph (force-directed) ────────────────────────────────── */
-const NoteGraph = ({ pages, activePid, onSelectPage }) => {
+const NoteGraph = ({ pages, folders, activePid, onSelectPage }) => {
   const canvasRef = useRef(null);
   const activePidRef = useRef(activePid);
+  const tooltipRef = useRef(null);
   useEffect(()=>{ activePidRef.current=activePid; },[activePid]);
+
+  // Palette for folder clusters — soft, distinct
+  const FOLDER_PALETTE = ['#c4607a','#9080d8','#5aab8c','#d4842a','#6aaccc','#b86aaa','#7a9a40','#cc5060'];
+  const folderColorMap = {};
+  (folders||[]).forEach((f,i)=>{ folderColorMap[f.id]=FOLDER_PALETTE[i%FOLDER_PALETTE.length]; });
 
   useEffect(()=>{
     const canvas=canvasRef.current;
-    if(!canvas) return;
-    const resize=()=>{ canvas.width=canvas.offsetWidth; canvas.height=canvas.offsetHeight; };
-    resize();
-    const W=canvas.width, H=canvas.height;
+    if(!canvas||!pages.length) return;
+    const resize=()=>{ canvas.width=canvas.offsetWidth; canvas.height=canvas.offsetHeight; draw(); };
+    canvas.width=canvas.offsetWidth; canvas.height=canvas.offsetHeight;
+    const W=()=>canvas.width, H=()=>canvas.height;
     const ctx=canvas.getContext('2d');
 
-    // Build nodes
-    const nodes=pages.map(p=>({
-      id:p.id, name:p.name,
-      x:W/2+(Math.random()-0.5)*W*0.55,
-      y:H/2+(Math.random()-0.5)*H*0.55,
-      vx:0, vy:0
-    }));
-    const nodeMap={};
-    nodes.forEach(n=>nodeMap[n.id]=n);
-
-    // Build edges from [[wikilinks]]
+    // Build edges first so we can size nodes by degree
+    const edgeSet=new Set();
     const edges=[];
     pages.forEach(p=>{
       const text=(p.content||'').replace(/<[^>]+>/g,' ');
       const re=/\[\[([^\]]+)\]\]/g; let m;
       while((m=re.exec(text))!==null){
         const target=pages.find(x=>x.name.toLowerCase()===m[1].toLowerCase());
-        if(target&&target.id!==p.id) edges.push({s:p.id,t:target.id});
+        if(target&&target.id!==p.id){
+          const key=[p.id,target.id].sort().join('-');
+          if(!edgeSet.has(key)){ edgeSet.add(key); edges.push({s:p.id,t:target.id}); }
+        }
+      }
+      // Auto-link pages in the same folder that share hashtags
+      const tagRe=/#([\w-]+)/g; const tags=[];
+      while((m=tagRe.exec(text))!==null) tags.push(m[1].toLowerCase());
+      if(tags.length){
+        pages.filter(q=>q.id!==p.id&&q.folderId===p.folderId).forEach(q=>{
+          const qt=(q.content||'').replace(/<[^>]+>/g,' ');
+          const hasSameTag=tags.some(t=>qt.toLowerCase().includes('#'+t));
+          if(hasSameTag){
+            const key=[p.id,q.id].sort().join('-');
+            if(!edgeSet.has(key)){ edgeSet.add(key); edges.push({s:p.id,t:q.id}); }
+          }
+        });
       }
     });
 
-    let animId;
-    const PINK='#c4607a', PURPLE='#9080d8', LAVENDER='#d4c0f0', CREAM='#fdfaf7';
+    const degreeMap={};
+    pages.forEach(p=>{ degreeMap[p.id]=0; });
+    edges.forEach(e=>{ degreeMap[e.s]=(degreeMap[e.s]||0)+1; degreeMap[e.t]=(degreeMap[e.t]||0)+1; });
 
-    const tick=()=>{
-      // Repulsion
-      for(let i=0;i<nodes.length;i++){
-        for(let j=i+1;j<nodes.length;j++){
-          const a=nodes[i],b=nodes[j];
-          const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
-          const f=Math.min(5000/(d*d),60);
-          a.vx-=dx/d*f; a.vy-=dy/d*f;
-          b.vx+=dx/d*f; b.vy+=dy/d*f;
-        }
-      }
-      // Spring attraction for edges
-      edges.forEach(e=>{
-        const a=nodeMap[e.s],b=nodeMap[e.t];
-        if(!a||!b)return;
-        const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
-        const f=(d-130)*0.035;
-        a.vx+=dx/d*f; a.vy+=dy/d*f;
-        b.vx-=dx/d*f; b.vy-=dy/d*f;
-      });
-      // Gravity + damping
-      nodes.forEach(n=>{
-        n.vx+=(W/2-n.x)*0.007; n.vy+=(H/2-n.y)*0.007;
-        n.vx*=0.80; n.vy*=0.80;
-        n.x=Math.max(50,Math.min(W-50,n.x+n.vx));
-        n.y=Math.max(50,Math.min(H-50,n.y+n.vy));
-      });
+    // Build nodes — initial positions clustered loosely by folder
+    const folderIds=[...new Set(pages.map(p=>p.folderId))];
+    const nodes=pages.map(p=>{
+      const fi=folderIds.indexOf(p.folderId);
+      const angle=(fi/Math.max(folderIds.length,1))*Math.PI*2;
+      const spread=0.28;
+      return {
+        id:p.id, name:p.name, folderId:p.folderId,
+        x:W()/2+Math.cos(angle)*W()*spread+(Math.random()-0.5)*80,
+        y:H()/2+Math.sin(angle)*H()*spread+(Math.random()-0.5)*80,
+        vx:0, vy:0
+      };
+    });
+    const nodeMap={};
+    nodes.forEach(n=>nodeMap[n.id]=n);
 
-      // Draw
-      ctx.fillStyle=CREAM; ctx.fillRect(0,0,W,H);
+    let animId, hoverId=null;
+    const CREAM='#fdfaf7', LAVENDER='#d4c0f0';
 
-      // Grid dots (Obsidian-style)
-      ctx.fillStyle='#e8d8e050';
-      for(let gx=0;gx<W;gx+=28) for(let gy=0;gy<H;gy+=28){
+    const draw=()=>{
+      const cw=canvas.width, ch=canvas.height;
+      ctx.fillStyle=CREAM; ctx.fillRect(0,0,cw,ch);
+      // Grid dots
+      ctx.fillStyle='#e8d8e040';
+      for(let gx=0;gx<cw;gx+=28) for(let gy=0;gy<ch;gy+=28){
         ctx.beginPath(); ctx.arc(gx,gy,1,0,Math.PI*2); ctx.fill();
       }
-
       // Edges
       edges.forEach(e=>{
-        const a=nodeMap[e.s],b=nodeMap[e.t];
-        if(!a||!b)return;
+        const a=nodeMap[e.s],b=nodeMap[e.t]; if(!a||!b) return;
+        const isHighlit=hoverId&&(e.s===hoverId||e.t===hoverId);
         ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
-        ctx.strokeStyle=`${LAVENDER}90`; ctx.lineWidth=1.5; ctx.stroke();
+        ctx.strokeStyle=isHighlit?`${LAVENDER}ff`:`${LAVENDER}70`;
+        ctx.lineWidth=isHighlit?2:1.2; ctx.stroke();
       });
-
       // Nodes
       const curActive=activePidRef.current;
       nodes.forEach(n=>{
         const isActive=n.id===curActive;
-        const r=isActive?12:8;
-        // Glow for active
-        if(isActive){
-          ctx.beginPath(); ctx.arc(n.x,n.y,r+6,0,Math.PI*2);
-          ctx.fillStyle=`${PINK}25`; ctx.fill();
+        const isHover=n.id===hoverId;
+        const deg=degreeMap[n.id]||0;
+        const r=Math.max(6,Math.min(14, 7+deg*1.8))+(isActive?3:0);
+        const color=folderColorMap[n.folderId]||'#9080d8';
+        if(isActive||isHover){
+          ctx.beginPath(); ctx.arc(n.x,n.y,r+7,0,Math.PI*2);
+          ctx.fillStyle=color+'30'; ctx.fill();
         }
-        // Circle
+        const grad=ctx.createRadialGradient(n.x-r*0.3,n.y-r*0.3,1,n.x,n.y,r);
+        grad.addColorStop(0,color+'ff');
+        grad.addColorStop(1,color+'99');
         ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
-        const grad=ctx.createRadialGradient(n.x-2,n.y-2,1,n.x,n.y,r);
-        grad.addColorStop(0,isActive?'#e07090':PURPLE+'dd');
-        grad.addColorStop(1,isActive?PINK:PURPLE+'88');
         ctx.fillStyle=grad; ctx.fill();
-        ctx.strokeStyle=isActive?PINK:LAVENDER; ctx.lineWidth=1.5; ctx.stroke();
-
+        ctx.strokeStyle=isActive?color:'#fff8';
+        ctx.lineWidth=isActive?2:1; ctx.stroke();
         // Label
-        ctx.fillStyle='#401828cc';
-        ctx.font=`${isActive?600:400} 10px DM Sans,sans-serif`;
-        ctx.textAlign='center';
-        const label=n.name.length>14?n.name.slice(0,13)+'…':n.name;
-        ctx.fillText(label,n.x,n.y-r-5);
+        const showLabel=isActive||isHover||deg>=2||nodes.length<=12;
+        if(showLabel){
+          const label=n.name.length>16?n.name.slice(0,15)+'…':n.name;
+          ctx.font=`${isActive||isHover?600:400} ${isActive?11:10}px DM Sans,sans-serif`;
+          ctx.textAlign='center';
+          ctx.fillStyle='#3a1828ee';
+          ctx.fillText(label,n.x,n.y-r-5);
+        }
       });
+      // Legend (folder → color)
+      const legendFolders=(folders||[]).filter(f=>pages.some(p=>p.folderId===f.id));
+      let lx=14, ly=14;
+      legendFolders.forEach(f=>{
+        const col=folderColorMap[f.id]||'#9080d8';
+        ctx.beginPath(); ctx.arc(lx+5,ly+5,5,0,Math.PI*2); ctx.fillStyle=col; ctx.fill();
+        ctx.font='500 10px DM Sans,sans-serif'; ctx.textAlign='left';
+        ctx.fillStyle='#5a2a40cc';
+        ctx.fillText(f.name,lx+13,ly+9);
+        lx+=ctx.measureText(f.name).width+30;
+        if(lx>canvas.width-80){ lx=14; ly+=18; }
+      });
+    };
 
+    const tick=()=>{
+      const cw=canvas.width, ch=canvas.height;
+      nodes.forEach((a,i)=>{
+        nodes.forEach((b,j)=>{ if(j<=i) return;
+          const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+          const f=Math.min(6000/(d*d),80);
+          a.vx-=dx/d*f; a.vy-=dy/d*f; b.vx+=dx/d*f; b.vy+=dy/d*f;
+        });
+      });
+      edges.forEach(e=>{
+        const a=nodeMap[e.s],b=nodeMap[e.t]; if(!a||!b) return;
+        const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+        const f=(d-120)*0.032;
+        a.vx+=dx/d*f; a.vy+=dy/d*f; b.vx-=dx/d*f; b.vy-=dy/d*f;
+      });
+      // Same-folder soft attraction
+      nodes.forEach((a,i)=>{
+        nodes.forEach((b,j)=>{ if(j<=i||a.folderId!==b.folderId) return;
+          const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+          if(d>160){ const f=(d-160)*0.008; a.vx+=dx/d*f; a.vy+=dy/d*f; b.vx-=dx/d*f; b.vy-=dy/d*f; }
+        });
+      });
+      nodes.forEach(n=>{
+        n.vx+=(cw/2-n.x)*0.005; n.vy+=(ch/2-n.y)*0.005;
+        n.vx*=0.82; n.vy*=0.82;
+        n.x=Math.max(40,Math.min(cw-40,n.x+n.vx));
+        n.y=Math.max(40,Math.min(ch-40,n.y+n.vy));
+      });
+      draw();
       animId=requestAnimationFrame(tick);
     };
     tick();
 
-    const onClick=e=>{
+    const getHit=e=>{
       const rect=canvas.getBoundingClientRect();
       const sx=canvas.width/rect.width, sy=canvas.height/rect.height;
       const mx=(e.clientX-rect.left)*sx, my=(e.clientY-rect.top)*sy;
-      const hit=nodes.find(n=>Math.sqrt((n.x-mx)**2+(n.y-my)**2)<18);
-      if(hit) onSelectPage(hit.id);
+      return nodes.find(n=>Math.sqrt((n.x-mx)**2+(n.y-my)**2)<20);
     };
+    const onClick=e=>{ const hit=getHit(e); if(hit) onSelectPage(hit.id); };
+    const onMove=e=>{
+      const hit=getHit(e);
+      const newHover=hit?hit.id:null;
+      if(newHover!==hoverId){ hoverId=newHover; canvas.style.cursor=newHover?'pointer':'default'; }
+      // tooltip
+      const tip=tooltipRef.current;
+      if(tip){
+        if(hit){ const rect=canvas.getBoundingClientRect(); tip.style.left=(e.clientX-rect.left+10)+'px'; tip.style.top=(e.clientY-rect.top-28)+'px'; tip.textContent=hit.name; tip.style.opacity=1; }
+        else tip.style.opacity=0;
+      }
+    };
+    const onLeave=()=>{ hoverId=null; if(tooltipRef.current) tooltipRef.current.style.opacity=0; };
     canvas.addEventListener('click',onClick);
-    return()=>{ cancelAnimationFrame(animId); canvas.removeEventListener('click',onClick); };
-  },[pages.length]);
+    canvas.addEventListener('mousemove',onMove);
+    canvas.addEventListener('mouseleave',onLeave);
+    window.addEventListener('resize',resize);
+    return()=>{ cancelAnimationFrame(animId); canvas.removeEventListener('click',onClick); canvas.removeEventListener('mousemove',onMove); canvas.removeEventListener('mouseleave',onLeave); window.removeEventListener('resize',resize); };
+  },[pages.length, pages.map(p=>p.id+p.name+p.folderId).join(',')]);
 
   return (
-    <div style={{flex:1,display:'flex',flexDirection:'column',background:'#fdfaf7',minWidth:0}}>
+    <div style={{flex:1,display:'flex',flexDirection:'column',background:'#fdfaf7',minWidth:0,position:'relative'}}>
       <div style={{padding:'10px 18px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
         <span style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:C.rose}}>Graph View</span>
-        <span style={{fontSize:11,color:C.textMuted}}>{pages.length} notes · {activePid?'click a node to open':'click any node'}</span>
+        <span style={{fontSize:11,color:C.textMuted}}>{pages.length} notes · nodes sized by connections · colors by notebook</span>
       </div>
-      <canvas ref={canvasRef} style={{flex:1,width:'100%',cursor:'pointer',display:'block'}}/>
+      <div style={{position:'relative',flex:1,minHeight:0}}>
+        <canvas ref={canvasRef} style={{width:'100%',height:'100%',display:'block'}}/>
+        <div ref={tooltipRef} style={{position:'absolute',pointerEvents:'none',background:'#3a1828ee',color:'#fff',fontSize:11,padding:'4px 9px',borderRadius:7,opacity:0,transition:'opacity 0.1s',whiteSpace:'nowrap',zIndex:10}}/>
+      </div>
     </div>
   );
 };
@@ -2168,7 +2236,7 @@ const NotebookPanel = ({ sub }) => {
       {/* ── Right editor area ── */}
       <div style={{flex:1,display:'flex',flexDirection:'column',background:C.cream,minWidth:0}}>
         {showGraph ? (
-          <NoteGraph pages={pages} activePid={activePid} onSelectPage={id=>{setActivePid(id);setShowGraph(false);}}/>
+          <NoteGraph pages={pages} folders={folders} activePid={activePid} onSelectPage={id=>{setActivePid(id);setShowGraph(false);}}/>
         ) : activePage ? (
           <>
             {/* Title bar */}
@@ -3770,21 +3838,33 @@ const GoalsPanel = ({ sub }) => {
 
   useEffect(()=>{ setReflection(localStorage.getItem(reflKey)||''); },[reflKey]);
 
-  const blankForm = () => ({title:'',description:'',targetDate:'',category:'',progress:0,periodType:getPeriodType(),periodValue:periodVal});
+  const blankForm = () => ({title:'',description:'',targetDate:'',category:'',progress:0,periodType:getPeriodType(),periodValue:periodVal,milestones:[]});
   const [form, setForm] = useState(blankForm);
-  useEffect(()=>{ if(!showForm) setForm(blankForm()); },[sub,selYear,selQ,selMonth]);
+  const [newMilestone, setNewMilestone] = useState('');
+  useEffect(()=>{ if(!showForm){ setForm(blankForm()); setNewMilestone(''); } },[sub,selYear,selQ,selMonth]);
 
   const save = g => { setGoals(g); localStorage.setItem(KEY,JSON.stringify(g)); };
   const submit = () => {
     if(!form.title.trim()) return;
-    const prog = Math.min(100,Math.max(0,parseInt(form.progress)||0));
+    const ms = form.milestones||[];
+    const prog = ms.length ? Math.round(ms.filter(m=>m.done).length/ms.length*100) : Math.min(100,Math.max(0,parseInt(form.progress)||0));
     if(editId) { save(goals.map(g=>g.id===editId?{...g,...form,progress:prog}:g)); setEditId(null); }
     else save([...goals,{id:Date.now(),...form,progress:prog,periodType:getPeriodType(),periodValue:periodVal,created:now.toISOString()}]);
-    setForm(blankForm()); setShowForm(false);
+    setForm(blankForm()); setNewMilestone(''); setShowForm(false);
   };
   const remove = id => { const g=goals.find(x=>x.id===id); if(g) addToTrash('goal',g.title,g,KEY); save(goals.filter(g=>g.id!==id)); };
   const updateProgress = (id,val) => save(goals.map(g=>g.id===id?{...g,progress:val}:g));
-  const startEdit = g => { setEditId(g.id); setForm({title:g.title,description:g.description||'',targetDate:g.targetDate||'',category:g.category||'',progress:g.progress,periodType:g.periodType||getPeriodType(),periodValue:g.periodValue||periodVal}); setShowForm(true); };
+  const startEdit = g => { setEditId(g.id); setForm({title:g.title,description:g.description||'',targetDate:g.targetDate||'',category:g.category||'',progress:g.progress,periodType:g.periodType||getPeriodType(),periodValue:g.periodValue||periodVal,milestones:g.milestones||[]}); setNewMilestone(''); setShowForm(true); };
+
+  const toggleMilestone = (goalId, msId) => {
+    const updated = goals.map(g => {
+      if(g.id!==goalId) return g;
+      const ms = (g.milestones||[]).map(m=>m.id===msId?{...m,done:!m.done}:m);
+      const prog = ms.length ? Math.round(ms.filter(m=>m.done).length/ms.length*100) : g.progress;
+      return {...g, milestones:ms, progress:prog};
+    });
+    save(updated);
+  };
 
   if(sub==='Recently Deleted') return <TrashPanel type="goal" />;
 
@@ -3897,6 +3977,21 @@ const GoalsPanel = ({ sub }) => {
               <input type="range" min={0} max={100} value={g.progress} onChange={e=>updateProgress(g.id,parseInt(e.target.value))} style={{ width:'100%', marginTop:4, accentColor:C.rose }}/>
             </div>
             {daysLeft!==null && <div style={{ fontSize:11, color:daysLeft<0?C.rose:daysLeft<=7?'#e87e3e':C.textMuted }}>📅 {daysLeft<0?`${Math.abs(daysLeft)}d overdue`:daysLeft===0?'Due today':`${daysLeft} days left`}</div>}
+            {(g.milestones||[]).length > 0 && (
+              <div style={{ marginTop:12, paddingTop:10, borderTop:`0.5px solid ${C.border}` }}>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:6, fontWeight:500, letterSpacing:0.5, textTransform:'uppercase' }}>
+                  Milestones · {(g.milestones||[]).filter(m=>m.done).length}/{(g.milestones||[]).length}
+                </div>
+                {(g.milestones||[]).map(m=>(
+                  <div key={m.id} onClick={()=>toggleMilestone(g.id,m.id)} style={{ display:'flex', alignItems:'center', gap:8, padding:'4px 0', cursor:'pointer' }}>
+                    <div style={{ width:14, height:14, borderRadius:4, flexShrink:0, border:`1.5px solid ${m.done?C.rose:C.accent}`, background:m.done?C.rose:'transparent', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s' }}>
+                      {m.done&&<Ico d={icons.check} size={9} stroke="#fff"/>}
+                    </div>
+                    <span style={{ fontSize:12.5, color:m.done?C.textMuted:C.text, textDecoration:m.done?'line-through':'none', lineHeight:1.4, flex:1 }}>{m.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {linkedTasks.length > 0 && (
               <div style={{ marginTop:12, paddingTop:10, borderTop:`0.5px solid ${C.border}` }}>
                 <div style={{ fontSize:11, color:C.textMuted, marginBottom:6, fontWeight:500 }}>
@@ -3975,8 +4070,30 @@ const GoalsPanel = ({ sub }) => {
               </div>
             </div>
             <div>
-              <div style={{ fontSize:11.5, color:C.textLight, marginBottom:4 }}>Initial Progress — {form.progress}%</div>
-              <input type="range" min={0} max={100} value={form.progress} onChange={e=>setForm(f=>({...f,progress:parseInt(e.target.value)}))} style={{ width:'100%', accentColor:C.rose }}/>
+              <div style={{ fontSize:11.5, color:C.textLight, marginBottom:6 }}>Milestones {form.milestones.length>0&&<span style={{color:C.textMuted}}>({form.milestones.filter(m=>m.done).length}/{form.milestones.length} done)</span>}</div>
+              {form.milestones.map(m=>(
+                <div key={m.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:5}}>
+                  <div onClick={()=>setForm(f=>({...f,milestones:f.milestones.map(x=>x.id===m.id?{...x,done:!x.done}:x)}))}
+                    style={{width:14,height:14,borderRadius:4,flexShrink:0,border:`1.5px solid ${m.done?C.rose:C.accent}`,background:m.done?C.rose:'transparent',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    {m.done&&<Ico d={icons.check} size={9} stroke="#fff"/>}
+                  </div>
+                  <span style={{flex:1,fontSize:12.5,color:m.done?C.textMuted:C.text,textDecoration:m.done?'line-through':'none'}}>{m.text}</span>
+                  <button onClick={()=>setForm(f=>({...f,milestones:f.milestones.filter(x=>x.id!==m.id)}))} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:15,lineHeight:1,padding:'0 2px'}}>×</button>
+                </div>
+              ))}
+              <div style={{display:'flex',gap:6,marginTop:4}}>
+                <input value={newMilestone} onChange={e=>setNewMilestone(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter'&&newMilestone.trim()){setForm(f=>({...f,milestones:[...f.milestones,{id:Date.now(),text:newMilestone.trim(),done:false}]}));setNewMilestone('');}}}
+                  placeholder="Add a milestone, press Enter…" style={{flex:1,padding:'7px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,outline:'none'}}/>
+                <button onClick={()=>{if(newMilestone.trim()){setForm(f=>({...f,milestones:[...f.milestones,{id:Date.now(),text:newMilestone.trim(),done:false}]}));setNewMilestone('');}}}
+                  style={{padding:'7px 12px',borderRadius:8,background:`${C.pink}50`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:12,cursor:'pointer'}}>+</button>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:11.5, color:C.textLight, marginBottom:4 }}>
+                {form.milestones.length>0 ? `Progress — auto-calculated from milestones (${Math.round(form.milestones.filter(m=>m.done).length/form.milestones.length*100)}%)` : `Initial Progress — ${form.progress}%`}
+              </div>
+              <input type="range" min={0} max={100} value={form.milestones.length>0?Math.round(form.milestones.filter(m=>m.done).length/form.milestones.length*100):form.progress} disabled={form.milestones.length>0} onChange={e=>setForm(f=>({...f,progress:parseInt(e.target.value)}))} style={{ width:'100%', accentColor:C.rose, opacity:form.milestones.length>0?0.5:1 }}/>
             </div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
               <button onClick={()=>{setShowForm(false);setEditId(null);}} style={{ padding:'7px 14px', borderRadius:10, background:`${C.pink}50`, border:`0.5px solid ${C.border}`, color:C.rose, fontSize:12.5, cursor:'pointer' }}>Cancel</button>
