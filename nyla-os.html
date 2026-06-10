@@ -4060,10 +4060,11 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
     const history=[...msgs,{role:'user',text:userText}];
     setMsgs(history); setInput(''); setLoading(true);
     try {
+      const agentSystem=agent.systemPrompt+buildAgentContext(agent.name)+AGENT_CMD_DOCS;
       const res=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:512,system:agent.systemPrompt+AGENT_CMD_DOCS,messages:history.map(m=>({role:m.role,content:m.text}))}),
+        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1024,system:agentSystem,messages:history.map(m=>({role:m.role,content:m.text}))}),
       });
       const data=await res.json();
       const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
@@ -4857,18 +4858,62 @@ const MainContent = ({ navId, sub, onRestoreBiz }) => (
   </div>
 );
 
+/* ── Agent Memory / Cross-Chat Context ─────────────────────────── */
+const buildAgentContext = (agentName = null) => {
+  try {
+    const history = JSON.parse(localStorage.getItem('nylaos_chat_history') || '[]');
+    const tasks   = JSON.parse(localStorage.getItem('nylaos_tasks')        || '[]');
+    const goals   = JSON.parse(localStorage.getItem('nylaos_goals')        || '[]');
+    const profile = JSON.parse(localStorage.getItem('nylaos_profile')      || '{"name":"Nyla"}');
+    const today   = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+
+    const pending = tasks.filter(t=>!t.done&&t.source!=='calendar').slice(0,6).map(t=>t.text);
+    const activeGoals = goals.slice(0,5).map(g=>`${g.title} (${g.progress}%)`);
+
+    // Pull last 3 sessions from ANY agent/chat (cross-reference)
+    const sessions = history
+      .filter(s=>s.msgs&&s.msgs.some(m=>m.role==='user'))
+      .slice(0,3);
+
+    const stripCmd = s => s.replace(/\[CMD:\{[\s\S]*?\}\]/g,'').trim();
+
+    let ctx = `\n\n--- NYLA'S CONTEXT (${today}) ---`;
+    ctx += `\nName: ${profile.name||'Nyla'}`;
+    if (pending.length)     ctx += `\nPending tasks: ${pending.join(' · ')}`;
+    if (activeGoals.length) ctx += `\nActive goals: ${activeGoals.join(' · ')}`;
+
+    if (sessions.length) {
+      ctx += '\n\nMemory from recent conversations:';
+      sessions.forEach(sess => {
+        const d = new Date(sess.date).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+        ctx += `\n[${d} – ${sess.label}]`;
+        // last 4 messages (2 exchanges)
+        sess.msgs.slice(-4).forEach(m => {
+          const who = m.role==='user' ? 'Nyla' : sess.label;
+          const txt = stripCmd(m.text||'').slice(0,140);
+          if (txt) ctx += `\n  ${who}: ${txt}`;
+        });
+      });
+    }
+    ctx += '\n--- END CONTEXT ---\n';
+    return ctx;
+  } catch(e) { return ''; }
+};
+
 /* ── Shared Agent Command Executor ─────────────────────────────── */
 const AGENT_CMD_DOCS = `
 
 You can take direct action in Nyla's dashboard. When she asks you to create or update something, respond conversationally then include ONE command block at the END:
-- Add task:             [CMD:{"action":"addTask","text":"task text"}]
-- Complete task:        [CMD:{"action":"completeTask","text":"partial task name"}]
-- Add goal:             [CMD:{"action":"addGoal","title":"goal title","category":"Personal|Business|Health|Financial|Creative|Spiritual|Education","periodType":"monthly|quarterly|yearly","periodValue":"YYYY-MM or YYYY-QN or YYYY","targetDate":"YYYY-MM-DD"}]
-- Update goal progress: [CMD:{"action":"updateGoalProgress","title":"goal title","progress":50}]
-- Add calendar event:   [CMD:{"action":"addEvent","date":"YYYY-MM-DD","text":"event description"}]
-- Add note:             [CMD:{"action":"addNote","folder":"All Notes","name":"page title","content":"note content"}]
-- Create notebook:      [CMD:{"action":"createNotebook","name":"notebook folder name"}]
+- Add task:              [CMD:{"action":"addTask","text":"task text"}]
+- Complete task:         [CMD:{"action":"completeTask","text":"partial task name"}]
+- Add goal:              [CMD:{"action":"addGoal","title":"goal title","category":"Personal|Business|Health|Financial|Creative|Spiritual|Education","periodType":"monthly|quarterly|yearly","periodValue":"YYYY-MM or YYYY-QN or YYYY","targetDate":"YYYY-MM-DD"}]
+- Update goal progress:  [CMD:{"action":"updateGoalProgress","title":"goal title","progress":50}]
+- Add single event:      [CMD:{"action":"addEvent","date":"YYYY-MM-DD","text":"event description"}]
+- Add recurring event:   [CMD:{"action":"addRecurringEvent","startDate":"YYYY-MM-DD","text":"event description","frequency":"daily|weekly|biweekly|monthly","count":12}]
+- Add note:              [CMD:{"action":"addNote","folder":"All Notes","name":"page title","content":"note content"}]
+- Create notebook:       [CMD:{"action":"createNotebook","name":"notebook folder name"}]
 
+For recurring events: frequency is daily/weekly/biweekly/monthly; count defaults to 26 (weekly), 12 (monthly), 14 (daily). Max 100 occurrences.
 Only include ONE command per response, and only when actually performing the action.`;
 
 const execAgentCmd = text => {
@@ -4898,6 +4943,24 @@ const execAgentCmd = text => {
     } else if (cmd.action==='addEvent') {
       const e=JSON.parse(localStorage.getItem('nylaos_events')||'[]');
       e.push({id:Date.now(),date:cmd.date,text:cmd.text});
+      localStorage.setItem('nylaos_events',JSON.stringify(e));
+    } else if (cmd.action==='addRecurringEvent') {
+      const e=JSON.parse(localStorage.getItem('nylaos_events')||'[]');
+      const freq=cmd.frequency||'weekly';
+      const defaultCounts={daily:14,weekly:26,biweekly:13,monthly:12};
+      const count=Math.min(Math.max(1,parseInt(cmd.count)||defaultCounts[freq]||12),100);
+      const groupId=Date.now();
+      const start=new Date(cmd.startDate);
+      if(isNaN(start.getTime())) throw new Error('Invalid startDate');
+      for(let i=0;i<count;i++){
+        const d=new Date(start);
+        if(freq==='daily')      d.setDate(d.getDate()+i);
+        else if(freq==='weekly') d.setDate(d.getDate()+i*7);
+        else if(freq==='biweekly') d.setDate(d.getDate()+i*14);
+        else if(freq==='monthly')  d.setMonth(d.getMonth()+i);
+        const dateStr=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        e.push({id:groupId+i,date:dateStr,text:cmd.text,recurringGroupId:groupId});
+      }
       localStorage.setItem('nylaos_events',JSON.stringify(e));
     } else if (cmd.action==='addNote') {
       const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
@@ -4935,10 +4998,11 @@ const FloatingChat = () => {
     const history=[...msgs,{role:'user',text:userText}];
     setMsgs(history); setInput(''); setLoading(true);
     try {
+      const floatSystem=FLOAT_SYSTEM+buildAgentContext(null);
       const res=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:512,system:FLOAT_SYSTEM,messages:history.map(m=>({role:m.role,content:m.text}))}),
+        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:800,system:floatSystem,messages:history.map(m=>({role:m.role,content:m.text}))}),
       });
       const data=await res.json();
       const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
