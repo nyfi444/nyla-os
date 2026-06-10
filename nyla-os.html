@@ -1773,13 +1773,196 @@ const NotebookPanel = ({ sub }) => {
   const saveFolderName = (id,name) => { saveFolders(folders.map(f=>f.id===id?{...f,name:name.trim()||'Folder'}:f)); setEditingFid(null); };
   const saveHeaderTitle = () => { if(!activePid) return; const n=headerTitle.trim()||'Untitled'; savePages(pages.map(p=>p.id===activePid?{...p,name:n}:p)); setHeaderEditing(false); };
 
+  const pdfStyles = `
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
+    *, *::before, *::after { box-sizing: border-box; }
+    @page { margin: 0.85in 1in; }
+    @media print { body { margin: 0; } .no-print { display: none !important; } }
+    body {
+      font-family: 'DM Sans', Georgia, serif;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 48px 0 80px;
+      line-height: 1.85;
+      color: #2a1a24;
+      background: #fff;
+      font-size: 14.5px;
+    }
+    .nyla-cover {
+      margin-bottom: 40px;
+      padding-bottom: 24px;
+      border-bottom: 1.5px solid #f0d0dc;
+    }
+    .nyla-notebook-label {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: #c4a0b4;
+      margin: 0 0 10px;
+    }
+    .nyla-page-title {
+      font-family: 'DM Serif Display', Georgia, serif;
+      font-size: 32px;
+      color: #c4607a;
+      margin: 0 0 8px;
+      line-height: 1.2;
+      font-weight: 400;
+    }
+    .nyla-meta {
+      font-size: 11.5px;
+      color: #b89aab;
+      margin: 0;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+    .nyla-meta span::before { content: '·'; margin-right: 6px; color: #e8c0ce; }
+    .nyla-meta span:first-child::before { display: none; }
+    .nyla-body {
+      line-height: 1.9;
+    }
+    .nyla-body h1 {
+      font-family: 'DM Serif Display', Georgia, serif;
+      font-size: 26px;
+      color: #c4607a;
+      font-weight: 400;
+      margin: 32px 0 10px;
+      border-bottom: 1px solid #f5e0ea;
+      padding-bottom: 6px;
+    }
+    .nyla-body h2 {
+      font-family: 'DM Serif Display', Georgia, serif;
+      font-size: 20px;
+      color: #a03c5a;
+      font-weight: 400;
+      margin: 28px 0 8px;
+    }
+    .nyla-body h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #7a3a56;
+      margin: 22px 0 6px;
+      letter-spacing: 0.3px;
+    }
+    .nyla-body p { margin: 0 0 12px; }
+    .nyla-body ul, .nyla-body ol { padding-left: 22px; margin: 8px 0 14px; }
+    .nyla-body li { margin-bottom: 5px; }
+    .nyla-body blockquote {
+      margin: 18px 0;
+      padding: 12px 20px;
+      border-left: 3px solid #e8b0c4;
+      background: #fff8fb;
+      color: #7a4060;
+      font-style: italic;
+      border-radius: 0 8px 8px 0;
+    }
+    .nyla-body code {
+      background: #fff0f5;
+      border: 0.5px solid #f0d0dc;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 12.5px;
+      color: #a03c5a;
+      font-family: 'Courier New', monospace;
+    }
+    .nyla-body pre {
+      background: #fff0f5;
+      border: 0.5px solid #f0d0dc;
+      border-radius: 8px;
+      padding: 14px 18px;
+      overflow-x: auto;
+      font-size: 12.5px;
+    }
+    .nyla-body hr {
+      border: none;
+      border-top: 1px solid #f0d8e4;
+      margin: 28px 0;
+    }
+    .nyla-body table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+      margin: 16px 0;
+    }
+    .nyla-body th {
+      background: #fdf0f5;
+      color: #a03c5a;
+      font-weight: 600;
+      padding: 8px 12px;
+      border: 0.5px solid #f0d0dc;
+      text-align: left;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+    }
+    .nyla-body td {
+      padding: 7px 12px;
+      border: 0.5px solid #f5e4ec;
+      vertical-align: top;
+    }
+    .nyla-body tr:nth-child(even) td { background: #fffafc; }
+    .nyla-footer {
+      margin-top: 60px;
+      padding-top: 16px;
+      border-top: 1px solid #f0d8e4;
+      font-size: 10.5px;
+      color: #c4a0b4;
+      display: flex;
+      justify-content: space-between;
+    }
+    /* page break between notebook sections */
+    .nyla-page-break { page-break-after: always; break-after: page; }
+  `;
+
+  const buildPageHtml = (page, folder, idx, total) => {
+    const dateStr = new Date(page.updated||page.created).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+    const wc = stripHtml(page.content||'').split(/\s+/).filter(Boolean).length;
+    const pageBreak = (idx < total - 1) ? '<div class="nyla-page-break"></div>' : '';
+    return `
+      <div class="nyla-cover">
+        <p class="nyla-notebook-label">${folder?.name||'Notebook'}</p>
+        <h1 class="nyla-page-title">${page.name}</h1>
+        <p class="nyla-meta"><span>${dateStr}</span><span>${wc} words</span></p>
+      </div>
+      <div class="nyla-body">${page.content||'<p style="color:#c4a0b4;font-style:italic;">No content.</p>'}</div>
+      <div class="nyla-footer">
+        <span>${folder?.name||'Notebook'} · ${page.name}</span>
+        <span>nyla os</span>
+      </div>
+      ${pageBreak}
+    `;
+  };
+
   const exportPDF = () => {
     if(!activePage) return;
-    const folder=folders.find(f=>f.id===activePage.folderId);
-    const dateStr=new Date(activePage.updated||activePage.created).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
-    const w=window.open('','_blank');
-    w.document.write(`<!DOCTYPE html><html><head><title>${activePage.name}</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:26px;color:#c4607a;}h2{font-size:20px;color:#a03c5a;}</style></head><body><p style="font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:1px;">${folder?.name||'Notebook'}</p><h1>${activePage.name}</h1><p style="font-size:12px;color:#aaa;">${dateStr}</p><div style="line-height:2;">${activePage.content||''}</div></body></html>`);
-    w.document.close(); w.print();
+    const folder = folders.find(f=>f.id===activePage.folderId);
+    const w = window.open('','_blank');
+    w.document.write(`<!DOCTYPE html><html><head><title>${activePage.name}</title><style>${pdfStyles}</style></head><body>${buildPageHtml(activePage,folder,0,1)}</body></html>`);
+    w.document.close();
+    w.onload = () => { w.focus(); w.print(); };
+  };
+
+  const exportNotebookPDF = () => {
+    if(!activePage) return;
+    const folder = folders.find(f=>f.id===activePage.folderId);
+    const notebookPages = pages.filter(p=>p.folderId===activePage.folderId);
+    if(!notebookPages.length) return;
+    const notebookTitle = folder?.name || 'Notebook';
+    const today = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+    const coverHtml = `
+      <div style="min-height:80vh;display:flex;flex-direction:column;justify-content:center;padding:0 0 60px;">
+        <p style="font-family:'DM Sans',sans-serif;font-size:10px;font-weight:500;letter-spacing:2.5px;text-transform:uppercase;color:#c4a0b4;margin:0 0 20px;">nyla os · notebook export</p>
+        <h1 style="font-family:'DM Serif Display',Georgia,serif;font-size:52px;color:#c4607a;margin:0 0 16px;font-weight:400;line-height:1.15;">${notebookTitle}</h1>
+        <p style="font-size:13px;color:#b89aab;margin:0;">${today} · ${notebookPages.length} page${notebookPages.length!==1?'s':''}</p>
+      </div>
+      <div class="nyla-page-break"></div>
+    `;
+    const pagesHtml = notebookPages.map((p,i)=>buildPageHtml(p,folder,i,notebookPages.length)).join('');
+    const w = window.open('','_blank');
+    w.document.write(`<!DOCTYPE html><html><head><title>${notebookTitle}</title><style>${pdfStyles}</style></head><body>${coverHtml}${pagesHtml}</body></html>`);
+    w.document.close();
+    w.onload = () => { w.focus(); w.print(); };
   };
 
   const backlinks = activePage ? pages.filter(p=>p.id!==activePid&&(p.content||'').includes(`[[${activePage.name}]]`)) : [];
@@ -2001,7 +2184,8 @@ const NotebookPanel = ({ sub }) => {
               )}
               <span style={{fontSize:10.5,color:C.textMuted,flexShrink:0}}>{wc} words</span>
               {tags.map(t=><span key={t} onClick={()=>setTagFilter(tagFilter===t?'':t)} style={{fontSize:10.5,padding:'2px 8px',borderRadius:10,background:`${C.lavender}70`,color:C.accent,cursor:'pointer',flexShrink:0}}>{t}</span>)}
-              <button onClick={exportPDF} style={{padding:'4px 11px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0}}>Export PDF</button>
+              <button onClick={exportPDF} style={{padding:'4px 11px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0}}>Export Page</button>
+              <button onClick={exportNotebookPDF} style={{padding:'4px 11px',borderRadius:8,background:`${C.rose}18`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0}}>Export Notebook</button>
             </div>
 
             {/* Formatting toolbar */}
