@@ -1857,10 +1857,12 @@ const NotebookPanel = ({ sub }) => {
   const [headerTitle, setHeaderTitle] = useState('');
   const [headerEditing, setHeaderEditing] = useState(false);
   const [fmt, setFmt] = useState({bold:false,italic:false,underline:false,strike:false});
+  const [nbFileLinked, setNbFileLinked] = useState(()=>!!window._nbFileHandle);
   const editorDomRef = useRef(null);
   const fileInputRef = useRef(null);
 
   useEffect(()=>{ const f=folders.find(f=>f.name===sub); if(f) setActiveFid(f.id); },[sub]);
+  useEffect(()=>{ const id=setInterval(()=>setNbFileLinked(!!window._nbFileHandle),1000); return()=>clearInterval(id); },[]);
   useEffect(()=>{ const p=pages.find(p=>p.id===activePid); if(p) setHeaderTitle(p.name); },[activePid]);
   useEffect(()=>{
     const onSel = () => {
@@ -2539,24 +2541,17 @@ const NotebookPanel = ({ sub }) => {
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                 Notebook
               </button>
-              {(()=>{
-                const [linked,setLinked]=React.useState(()=>!!window._nbFileHandle);
-                React.useEffect(()=>{
-                  const id=setInterval(()=>setLinked(!!window._nbFileHandle),1000);
-                  return()=>clearInterval(id);
-                },[]);
-                return linked?(
-                  <button onClick={()=>{window.unlinkNotebookFile();setLinked(false);}} title="Auto-saving to local file — click to unlink" style={{padding:'4px 11px',borderRadius:8,background:`#68c97a22`,border:`0.5px solid #68c97a66`,color:'#3a8a4a',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
-                    <span style={{width:6,height:6,borderRadius:'50%',background:'#68c97a',display:'inline-block'}}/>
-                    Saving to file
-                  </button>
-                ):(
-                  <button onClick={()=>{window.pickNotebookFile().then(()=>setLinked(!!window._nbFileHandle));}} title="Auto-save notebook to a file on your computer" style={{padding:'4px 11px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    Save to file
-                  </button>
-                );
-              })()}
+              {nbFileLinked?(
+                <button onClick={()=>{window.unlinkNotebookFile();setNbFileLinked(false);}} title="Auto-saving to local file — click to unlink" style={{padding:'4px 11px',borderRadius:8,background:`#68c97a22`,border:`0.5px solid #68c97a66`,color:'#3a8a4a',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
+                  <span style={{width:6,height:6,borderRadius:'50%',background:'#68c97a',display:'inline-block'}}/>
+                  Saving to file
+                </button>
+              ):(
+                <button onClick={()=>window.pickNotebookFile().then(()=>setNbFileLinked(!!window._nbFileHandle))} title="Auto-save notebook to a file on your computer" style={{padding:'4px 11px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  Save to file
+                </button>
+              )}
             </div>
 
             {/* ── Formatting toolbar — row 1: text style ── */}
