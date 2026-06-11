@@ -64,6 +64,8 @@ let _fbAuth=null, _fbDb=null, _fbUser=null, _syncTimer=null;
 const _syncSubs=new Set();
 let _syncState={status:'idle',user:null};
 const _setSyncState=s=>{_syncState=s;_syncSubs.forEach(fn=>fn(s));};
+// Prevents double-reload when _cloudLoad and onSnapshot both fire on sign-in
+let _reloadPending=false;
 
 const useSyncStatus=()=>{
   const [s,setS]=React.useState(_syncState);
@@ -71,7 +73,7 @@ const useSyncStatus=()=>{
   return s;
 };
 
-async function _cloudLoad(forceLoad=false){
+async function _cloudLoad(){
   if(!_fbUser||!_fbDb) return;
   _setSyncState({status:'syncing',user:_fbUser});
   try{
@@ -79,19 +81,22 @@ async function _cloudLoad(forceLoad=false){
     if(doc.exists){
       const {snapshot,savedAt}=doc.data();
       const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
-      // Only reload when cloud data is actually newer — prevents infinite reload loop on sign-in
-      if(snapshot&&savedAt>localTs){
-        const data=JSON.parse(snapshot);
-        Object.entries(data).forEach(([k,v])=>{
-          if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
-        });
-        _rawLS('nylaos_cloud_ts',String(savedAt));
-        _setSyncState({status:'synced',user:_fbUser});
-        window.location.reload(); return;
-      }
+      if(snapshot&&savedAt>localTs){_applyCloudSnapshot(snapshot,savedAt,_fbUser);return;}
     }
     _setSyncState({status:'synced',user:_fbUser});
   }catch(e){console.warn('Cloud load:',e);_setSyncState({status:'error',user:_fbUser});}
+}
+
+function _applyCloudSnapshot(snapshot, savedAt, user){
+  if(_reloadPending) return;
+  const data=JSON.parse(snapshot);
+  Object.entries(data).forEach(([k,v])=>{
+    if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
+  });
+  _rawLS('nylaos_cloud_ts',String(savedAt));
+  _setSyncState({status:'synced',user});
+  _reloadPending=true;
+  window.location.reload();
 }
 
 async function cloudSave(){
@@ -141,24 +146,20 @@ let _cloudListener=null;
       // Tear down old real-time listener
       if(_cloudListener){_cloudListener();_cloudListener=null;}
       if(user){
-        // Force-load latest cloud data immediately on sign-in
-        _cloudLoad(true);
-        // Real-time listener: fires whenever another device saves
+        _setSyncState({status:'syncing',user});
+        // onSnapshot fires immediately on attach (initial load) AND on remote changes.
+        // We skip _cloudLoad entirely to avoid the double-reload race.
         _cloudListener=_fbDb.collection('nylaos').doc(user.uid).onSnapshot(doc=>{
-          if(doc.metadata.hasPendingWrites) return; // ignore our own writes
-          if(!doc.exists) return;
+          if(doc.metadata.hasPendingWrites) return; // ignore our own in-flight writes
+          if(!doc.exists){_setSyncState({status:'synced',user});return;}
           const {snapshot,savedAt}=doc.data();
           const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
           if(snapshot&&savedAt>localTs){
-            const data=JSON.parse(snapshot);
-            Object.entries(data).forEach(([k,v])=>{
-              if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
-            });
-            _rawLS('nylaos_cloud_ts',String(savedAt));
+            _applyCloudSnapshot(snapshot,savedAt,user);
+          } else {
             _setSyncState({status:'synced',user});
-            window.location.reload();
           }
-        },err=>console.warn('Cloud listener:',err));
+        },err=>{console.warn('Cloud listener:',err);_setSyncState({status:'error',user});});
       } else {
         _setSyncState({status:'idle',user:null});
       }
