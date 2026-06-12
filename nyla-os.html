@@ -1874,6 +1874,15 @@ const NotebookPanel = ({ sub }) => {
 
   const saveFolders = f => { setFolders(f); localStorage.setItem(FK,JSON.stringify(f)); };
   const savePages   = p => { setPages(p);   localStorage.setItem(PK,JSON.stringify(p)); };
+  // Stale-closure-safe: always reads the latest pages from localStorage before updating
+  const updateContent = html => {
+    if(!activePid) return;
+    setPages(prev => {
+      const updated = prev.map(p=>p.id===activePid?{...p,content:html,updated:new Date().toISOString()}:p);
+      localStorage.setItem(PK,JSON.stringify(updated));
+      return updated;
+    });
+  };
 
   const activePage = pages.find(p=>p.id===activePid);
   const stripHtml = h => (h||'').replace(/<[^>]+>/g,' ');
@@ -1885,8 +1894,6 @@ const NotebookPanel = ({ sub }) => {
     : tagFilter ? pages.filter(p=>getTags(p.content).includes(tagFilter))
     : activeFid===1 ? pages
     : pages.filter(p=>getDescFids(activeFid).includes(p.folderId));
-
-  const updateContent = html => savePages(pages.map(p=>p.id===activePid?{...p,content:html,updated:new Date().toISOString()}:p));
 
   const exec = (cmd, val=null) => {
     document.execCommand(cmd, false, val);
