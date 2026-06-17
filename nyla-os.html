@@ -128,6 +128,7 @@ localStorage.setItem=function(key,value){
   if(key==='nylaos_nb_pages'){
     if(_nbFileTimer) clearTimeout(_nbFileTimer);
     _nbFileTimer=setTimeout(_writeNotebookFile,1500);
+    if(window._backupNotebooks) window._backupNotebooks();
   }
 };
 
@@ -176,6 +177,85 @@ function _htmlToText(html){
   const d=document.createElement('div');d.innerHTML=html;
   return (d.innerText||d.textContent||'').trim();
 }
+
+/* ── Notebook backup to IndexedDB (guard against localStorage loss) ── */
+(function(){
+  const DB_NAME='nylaos_nb_backup', STORE='snapshots';
+  const _openBackupDb=()=>new Promise((res,rej)=>{
+    const r=indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded=e=>e.target.result.createObjectStore(STORE);
+    r.onsuccess=e=>res(e.target.result);
+    r.onerror=e=>rej(e.target.error);
+  });
+  window._backupNotebooks=async()=>{
+    try{
+      const folders=localStorage.getItem('nylaos_nb_folders');
+      const pages=localStorage.getItem('nylaos_nb_pages');
+      if(!pages) return;
+      const db=await _openBackupDb();
+      const tx=db.transaction(STORE,'readwrite');
+      const s=tx.objectStore(STORE);
+      s.put({folders,pages,ts:Date.now()},'latest');
+      s.put({folders,pages,ts:Date.now()},'snap_'+new Date().toISOString().split('T')[0]);
+      tx.oncomplete=()=>{};
+    }catch(e){console.warn('Notebook backup:',e);}
+  };
+  window._restoreNotebooksIfEmpty=async()=>{
+    try{
+      const existing=localStorage.getItem('nylaos_nb_pages');
+      if(existing&&JSON.parse(existing).length>0) return;
+      const db=await _openBackupDb();
+      const tx=db.transaction(STORE,'readonly');
+      const r=tx.objectStore(STORE).get('latest');
+      r.onsuccess=()=>{
+        if(!r.result) return;
+        const snap=r.result;
+        if(snap.pages){
+          const parsed=JSON.parse(snap.pages);
+          if(parsed.length>0){
+            localStorage.setItem('nylaos_nb_pages',snap.pages);
+            if(snap.folders) localStorage.setItem('nylaos_nb_folders',snap.folders);
+            console.log('Notebooks restored from backup ('+parsed.length+' pages)');
+          }
+        }
+      };
+    }catch(e){console.warn('Notebook restore:',e);}
+  };
+  window._restoreNotebooksIfEmpty();
+  setInterval(()=>window._backupNotebooks(),30000);
+})();
+
+window._exportNotebookMd=function(){
+  const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
+  const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
+  if(!pages.length) return null;
+  const grouped={};
+  pages.forEach(p=>{const fid=p.folderId??'__unfiled';if(!grouped[fid])grouped[fid]=[];grouped[fid].push(p);});
+  let md=`# Nyla OS Notebooks\n*Exported: ${new Date().toLocaleString()}*\n`;
+  const sorted=[...folders].sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  for(const f of sorted){
+    const fps=grouped[f.id]||[];if(!fps.length)continue;
+    md+=`\n---\n\n## ${f.name}\n`;
+    for(const p of fps){
+      md+=`\n### ${p.name||'Untitled'}\n`;
+      if(p.updated)md+=`*${new Date(p.updated).toLocaleString()}*\n\n`;
+      const txt=_htmlToText(p.content||'');
+      if(txt)md+=txt+'\n';
+    }
+  }
+  return md;
+};
+
+window._exportToGoogleDrive=function(){
+  const md=window._exportNotebookMd();
+  if(!md){alert('No notebooks to export.');return;}
+  const blob=new Blob([md],{type:'text/markdown'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='nyla-os-notebooks.md'; a.click();
+  URL.revokeObjectURL(url);
+  setTimeout(()=>window.open('https://drive.google.com/drive/my-drive','_blank'),500);
+};
 
 async function _writeNotebookFile(){
   const h=window._nbFileHandle;
@@ -2547,6 +2627,9 @@ const NotebookPanel = ({ sub }) => {
               <button onClick={exportNotebookPDF} title="Print / Export entire notebook as PDF" style={{padding:'4px 11px',borderRadius:8,background:`${C.rose}18`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                 Notebook
+              </button>
+              <button onClick={()=>window._exportToGoogleDrive()} title="Export notebooks and open Google Drive" style={{padding:'4px 11px',borderRadius:8,background:'rgba(66,133,244,0.08)',border:'0.5px solid rgba(66,133,244,0.33)',color:'#4285f4',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
+                {"☁️ Drive"}
               </button>
               {nbFileLinked?(
                 <button onClick={()=>{window.unlinkNotebookFile();setNbFileLinked(false);}} title="Auto-saving to local file — click to unlink" style={{padding:'4px 11px',borderRadius:8,background:`#68c97a22`,border:`0.5px solid #68c97a66`,color:'#3a8a4a',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
