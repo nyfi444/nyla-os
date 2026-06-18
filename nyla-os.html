@@ -8,7 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.26.10/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
   <!-- Firebase (cross-device sync) -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -26,6 +26,15 @@
     .fade-in { animation: fadeIn 0.22s ease; }
     .tab-btn { cursor:pointer; transition:all 0.14s; }
     .tab-btn:hover { opacity:0.85; }
+    /* Toast */
+    @keyframes toastIn { from { opacity:0; transform:translateY(16px) scale(0.95); } to { opacity:1; transform:translateY(0) scale(1); } }
+    @keyframes toastOut { from { opacity:1; transform:translateY(0); } to { opacity:0; transform:translateY(-12px); } }
+    /* Micro-animations */
+    @keyframes checkPop { 0% { transform:scale(1); } 40% { transform:scale(1.3); } 100% { transform:scale(1); } }
+    @keyframes confettiBurst { 0% { opacity:1; transform:scale(0); } 50% { opacity:1; transform:scale(1.2); } 100% { opacity:0; transform:scale(1.5); } }
+    @keyframes cardLift { from { box-shadow: none; } to { box-shadow: 0 4px 16px rgba(196,96,122,0.12); } }
+    .card-hover { transition: transform 0.18s ease, box-shadow 0.18s ease; }
+    .card-hover:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(196,96,122,0.12); }
     .rich-editor { outline:none; }
     .rich-editor h1 { font-family:'DM Serif Display',serif; font-size:26px; color:#c4607a; margin:18px 0 8px; line-height:1.3; font-weight:400; }
     .rich-editor h2 { font-family:'DM Serif Display',serif; font-size:20px; color:#a03c5a; margin:14px 0 6px; line-height:1.4; font-weight:400; }
@@ -42,7 +51,40 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
+
+/* ── Toast Notification System ─────────────────────────────────────── */
+let _toastListeners = [];
+const toast = (message, type='success', duration=2800) => {
+  const id = Date.now() + Math.random();
+  _toastListeners.forEach(fn => fn({ id, message, type, duration }));
+};
+const ToastContainer = () => {
+  const [toasts, setToasts] = useState([]);
+  useEffect(() => {
+    const handler = t => {
+      setToasts(prev => [...prev, { ...t, exiting: false }]);
+      setTimeout(() => setToasts(prev => prev.map(x => x.id === t.id ? { ...x, exiting: true } : x)), t.duration - 400);
+      setTimeout(() => setToasts(prev => prev.filter(x => x.id !== t.id)), t.duration);
+    };
+    _toastListeners.push(handler);
+    return () => { _toastListeners = _toastListeners.filter(fn => fn !== handler); };
+  }, []);
+  if (!toasts.length) return null;
+  const icons = { success: '✓', error: '✕', info: '✦', sync: '↻' };
+  const colors = { success: '#3a8a4a', error: '#c44060', info: '#9080d8', sync: '#4285f4' };
+  return React.createElement('div', { style: { position: 'fixed', bottom: 90, left: '50%', transform: 'translateX(-50%)', zIndex: 10000, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', pointerEvents: 'none' } },
+    toasts.map(t => React.createElement('div', { key: t.id, style: {
+      padding: '10px 20px', borderRadius: 14, background: _dk ? '#2a1e28' : '#fffcfd',
+      border: `0.5px solid ${colors[t.type]}40`, boxShadow: `0 6px 24px ${colors[t.type]}30, 0 2px 8px rgba(0,0,0,0.08)`,
+      display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: _dk ? '#f0e0e8' : '#401828',
+      animation: t.exiting ? 'toastOut 0.35s ease forwards' : 'toastIn 0.3s ease', pointerEvents: 'auto',
+    } },
+      React.createElement('span', { style: { width: 22, height: 22, borderRadius: '50%', background: colors[t.type], color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 } }, icons[t.type]),
+      t.message
+    ))
+  );
+};
 
 /* ── Firebase Cross-Device Sync ──────────────────────────────────────
    Fill in FB_CONFIG with your Firebase project details to enable sync.
@@ -114,7 +156,8 @@ async function cloudSave(){
     });
     _rawLS('nylaos_cloud_ts',String(savedAt));
     _setSyncState({status:'synced',user:_fbUser});
-  }catch(e){console.warn('Cloud save:',e);_setSyncState({status:'error',user:_fbUser});}
+    if(typeof toast==='function') toast('Synced to cloud','sync',2000);
+  }catch(e){console.warn('Cloud save:',e);_setSyncState({status:'error',user:_fbUser});if(typeof toast==='function') toast('Sync failed','error');}
 }
 
 // Intercept all localStorage writes → auto-sync 2.5s after last change
@@ -254,6 +297,7 @@ window._exportToGoogleDrive=function(){
   const a=document.createElement('a');
   a.href=url; a.download='nyla-os-notebooks.md'; a.click();
   URL.revokeObjectURL(url);
+  if(typeof toast==='function') toast('Notebooks exported — opening Google Drive','success');
   setTimeout(()=>window.open('https://drive.google.com/drive/my-drive','_blank'),500);
 };
 
@@ -427,11 +471,20 @@ const C = {
   gradNight:   'linear-gradient(160deg,#1a0a2e 0%,#2d1450 60%,#120820 100%)',
 };
 
+/* ── Task Tag Colors ────────────────────────────────────────────── */
+const TAG_COLORS = {
+  school:   { bg:'#4285f4', label:'🎓 School',   light:'#4285f420' },
+  business: { bg:'#34a853', label:'💼 Business',  light:'#34a85320' },
+  personal: { bg:'#c4607a', label:'✦ Personal',   light:'#c4607a20' },
+  health:   { bg:'#ea4335', label:'💪 Health',     light:'#ea433520' },
+  creative: { bg:'#9080d8', label:'🎨 Creative',   light:'#9080d820' },
+};
+
 /* ── Nav ────────────────────────────────────────────────────────── */
 const NAV = [
-  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode'] },
+  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes','Dream Life'] },
   { id:'calendar',   label:'Calendar',   sub:['Monthly','Daily','Weekly','Quarterly','Yearly'] },
-  { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Projects','Completed','Recently Deleted'] },
+  { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Kanban','Eisenhower','Habits','Bored Bucket','Projects','Completed','Recently Deleted'] },
   { id:'period',     label:'Period',     sub:['Cycle Overview','Phase Log','Symptoms','Learn'] },
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Recently Deleted'] },
@@ -559,6 +612,7 @@ const Checkbox = ({ checked, onChange, size=20 }) => (
     background: checked ? C.rose : 'transparent',
     border:`1.5px solid ${checked ? C.rose : C.accent}`,
     cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s',
+    animation: checked ? 'checkPop 0.3s ease' : 'none',
   }}>
     {checked && <Ico d={icons.check} size={12} stroke="#fff" />}
   </button>
@@ -660,6 +714,17 @@ const TopBar = () => {
       </div>
       <div style={{ display:'flex', alignItems:'center', gap:10 }}>
         <SyncButton />
+        <button onClick={()=>{
+          const ap=JSON.parse(localStorage.getItem('nylaos_appearance')||'{}');
+          ap.darkMode=!ap.darkMode;
+          localStorage.setItem('nylaos_appearance',JSON.stringify(ap));
+          toast(ap.darkMode?'Dark mode on 🌙':'Light mode on ☀️','info',1800);
+          setTimeout(()=>location.reload(),400);
+        }} title="Toggle dark mode" style={{
+          width:36, height:36, borderRadius:10, background:`${C.pink}55`,
+          border:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer',
+          fontSize:16, transition:'all 0.15s',
+        }}>{_dk?'☀️':'🌙'}</button>
         {showSearch && (
           <input autoFocus value={search} onChange={e=>setSearch(e.target.value)}
             placeholder="Search..." onBlur={()=>{ if(!search) setShowSearch(false); }}
@@ -863,15 +928,55 @@ const HomeOverview = () => {
         </div>
       </Card>
 
+      {/* ── Today at a Glance ── */}
+      <Card className="card-hover" style={{ gridColumn:'1 / -1' }}>
+        <SectionHeading>Today at a Glance</SectionHeading>
+        {(()=>{
+          const todayKey = toDateKey();
+          const events = JSON.parse(localStorage.getItem('nylaos_events')||'[]').filter(e=>e.date===todayKey);
+          const todayTasks = tasks.filter(t=>!t.done&&(t.calendarDate===todayKey||t.source!=='calendar'));
+          const topTasks = todayTasks.slice(0,5);
+          const goals = JSON.parse(localStorage.getItem('nylaos_goals')||'[]').slice(0,3);
+          return React.createElement('div',{style:{display:'flex',gap:16,flexWrap:'wrap'}},
+            React.createElement('div',{style:{flex:'1 1 200px',minWidth:180}},
+              React.createElement('div',{style:{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:'uppercase',letterSpacing:0.6,marginBottom:6}},'Tasks'),
+              topTasks.length===0
+                ? React.createElement('div',{style:{fontSize:12.5,color:C.textMuted,fontStyle:'italic'}},'All clear ✨')
+                : topTasks.map(t=>React.createElement('div',{key:t.id,style:{display:'flex',alignItems:'center',gap:8,padding:'4px 0',fontSize:12.5,color:C.text}},
+                    React.createElement('span',{style:{width:6,height:6,borderRadius:'50%',background:t.tag?TAG_COLORS[t.tag]?.bg||C.rose:C.rose,flexShrink:0}}),
+                    React.createElement('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},t.text)
+                  ))
+            ),
+            React.createElement('div',{style:{flex:'1 1 200px',minWidth:180}},
+              React.createElement('div',{style:{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:'uppercase',letterSpacing:0.6,marginBottom:6}},'Calendar'),
+              events.length===0
+                ? React.createElement('div',{style:{fontSize:12.5,color:C.textMuted,fontStyle:'italic'}},'No events today')
+                : events.slice(0,4).map(e=>React.createElement('div',{key:e.id,style:{padding:'4px 0',fontSize:12.5,color:C.text}},
+                    '📅 '+e.text
+                  ))
+            ),
+            goals.length>0&&React.createElement('div',{style:{flex:'1 1 160px',minWidth:140}},
+              React.createElement('div',{style:{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:'uppercase',letterSpacing:0.6,marginBottom:6}},'Top Goals'),
+              goals.map(g=>React.createElement('div',{key:g.id,style:{display:'flex',alignItems:'center',gap:8,padding:'3px 0'}},
+                React.createElement('div',{style:{width:28,height:28,borderRadius:'50%',background:`conic-gradient(${C.rose} ${(g.progress||0)*3.6}deg, ${C.pink}60 0)`,display:'flex',alignItems:'center',justifyContent:'center'}},
+                  React.createElement('div',{style:{width:20,height:20,borderRadius:'50%',background:C.card,fontSize:8,display:'flex',alignItems:'center',justifyContent:'center',color:C.textMuted,fontWeight:600}},(g.progress||0)+'%')
+                ),
+                React.createElement('span',{style:{fontSize:12,color:C.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},g.title)
+              ))
+            )
+          );
+        })()}
+      </Card>
+
       {/* Today's Intentions */}
-      <Card>
+      <Card className="card-hover">
         <SectionHeading>Today's Intentions</SectionHeading>
         <TextArea value={intention} height={120} placeholder="What are you calling in today? Set your tone..."
           onChange={e=>{ setIntention(e.target.value); localStorage.setItem('nylaos_intention_'+new Date().toDateString(),e.target.value); }} />
       </Card>
 
       {/* Today's Focus */}
-      <Card>
+      <Card className="card-hover">
         <SectionHeading>Today's Focus</SectionHeading>
         <TextArea value={dailyFocus} height={120} placeholder="What is your main focus for today?"
           onChange={e=>{ setDailyFocus(e.target.value); localStorage.setItem('nylaos_focus_'+new Date().toDateString(),e.target.value); }} />
@@ -1422,26 +1527,461 @@ const TrashPanel = ({ type, onRestoreBusiness }) => {
   );
 };
 
+/* ── Kanban Board ─────────────────────────────────────────────────── */
+const KanbanBoard = ({ storageKey='nylaos_tasks' }) => {
+  const [tasks, setTasks] = useState(()=>JSON.parse(localStorage.getItem(storageKey)||'[]').filter(t=>t.source!=='calendar'));
+  const [input, setInput] = useState('');
+  const save = t => { const all=JSON.parse(localStorage.getItem(storageKey)||'[]'); const calTasks=all.filter(x=>x.source==='calendar'); setTasks(t); localStorage.setItem(storageKey,JSON.stringify([...t,...calTasks])); };
+  const cols = [
+    { key:'todo', label:'To Do', filter: t=>!t.done&&!t.status, color:C.pink },
+    { key:'progress', label:'In Progress', filter: t=>!t.done&&t.status==='progress', color:`${C.accent}60` },
+    { key:'done', label:'Done', filter: t=>t.done, color:`#68c97a40` },
+  ];
+  const moveTask = (id, col) => {
+    save(tasks.map(t=>{
+      if(t.id!==id) return t;
+      if(col==='done') return {...t,done:true,status:null,completedDate:toDateKey()};
+      if(col==='progress') return {...t,done:false,status:'progress',completedDate:null};
+      return {...t,done:false,status:null,completedDate:null};
+    }));
+    toast(col==='done'?'Task completed ✓':'Task moved','success',1500);
+  };
+  const addTask = () => { if(!input.trim()) return; save([...tasks,{id:Date.now(),text:input.trim(),done:false,created:new Date().toISOString()}]); setInput(''); };
+  return (
+    <div className="fade-in">
+      <PageTitle>Kanban</PageTitle>
+      <div style={{display:'flex',gap:10,marginBottom:20}}>
+        <InlineInput value={input} onChange={e=>setInput(e.target.value)} placeholder="Add a task..." onKeyDown={e=>e.key==='Enter'&&addTask()} style={{flex:1}}/>
+        <button onClick={addTask} style={{padding:'9px 22px',borderRadius:12,background:C.rose,color:'#fff',border:'none',fontSize:13.5,fontWeight:500,cursor:'pointer'}}>Add</button>
+      </div>
+      <div style={{display:'flex',gap:14,minHeight:400}}>
+        {cols.map(col=>{
+          const items=tasks.filter(col.filter);
+          return (
+            <div key={col.key} style={{flex:1,background:col.color,borderRadius:14,padding:12,border:`0.5px solid ${C.border}`}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.text,marginBottom:10,textTransform:'uppercase',letterSpacing:0.5}}>{col.label} ({items.length})</div>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {items.map(t=>(
+                  <div key={t.id} className="card-hover" style={{padding:'10px 12px',borderRadius:10,background:C.card,border:`0.5px solid ${C.border}`,cursor:'default'}}>
+                    <div style={{fontSize:12.5,color:t.done?C.textMuted:C.text,textDecoration:t.done?'line-through':'none',marginBottom:6}}>{t.text}</div>
+                    {t.tag&&<span style={{fontSize:10,padding:'2px 7px',borderRadius:8,background:TAG_COLORS[t.tag]?.light||'',color:TAG_COLORS[t.tag]?.bg||C.rose}}>{TAG_COLORS[t.tag]?.label||t.tag}</span>}
+                    <div style={{display:'flex',gap:4,marginTop:6}}>
+                      {col.key!=='todo'&&<button onClick={()=>moveTask(t.id,'todo')} style={{fontSize:10,padding:'2px 8px',borderRadius:6,background:`${C.pink}60`,border:'none',color:C.rose,cursor:'pointer'}}>← To Do</button>}
+                      {col.key!=='progress'&&<button onClick={()=>moveTask(t.id,'progress')} style={{fontSize:10,padding:'2px 8px',borderRadius:6,background:`${C.accent}30`,border:'none',color:C.accent,cursor:'pointer'}}>⟳ Progress</button>}
+                      {col.key!=='done'&&<button onClick={()=>moveTask(t.id,'done')} style={{fontSize:10,padding:'2px 8px',borderRadius:6,background:'#68c97a30',border:'none',color:'#3a8a4a',cursor:'pointer'}}>✓ Done</button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+/* ── Habit Tracker ─────────────────────────────────────────────────── */
+const DEFAULT_HABITS = ['💧 Water','🏋️ Exercise','📖 Read','🧘 Meditate','📝 Journal'];
+const HabitTracker = () => {
+  const HK = 'nylaos_habits';
+  const [habits, setHabits] = useState(()=>JSON.parse(localStorage.getItem(HK)||'null')||DEFAULT_HABITS.map((h,i)=>({id:i+1,name:h})));
+  const [log, setLog] = useState(()=>JSON.parse(localStorage.getItem('nylaos_habit_log')||'{}'));
+  const [newHabit, setNewHabit] = useState('');
+  const saveHabits = h => { setHabits(h); localStorage.setItem(HK,JSON.stringify(h)); };
+  const saveLog = l => { setLog(l); localStorage.setItem('nylaos_habit_log',JSON.stringify(l)); };
+  const toggleDay = (habitId, dateKey) => {
+    const k = `${habitId}_${dateKey}`;
+    const nl = {...log};
+    nl[k] = !nl[k];
+    saveLog(nl);
+    if(nl[k]) toast('Habit checked ✓','success',1200);
+  };
+  const addHabit = () => { if(!newHabit.trim()) return; saveHabits([...habits,{id:Date.now(),name:newHabit.trim()}]); setNewHabit(''); };
+  const removeHabit = id => { saveHabits(habits.filter(h=>h.id!==id)); };
+  const days = [];
+  for(let i=27;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(d); }
+  const getStreak = (habitId) => { let s=0; for(let i=0;i<28;i++){ const d=new Date(); d.setDate(d.getDate()-i); if(log[`${habitId}_${toDateKey(d)}`]) s++; else break; } return s; };
+  return (
+    <div className="fade-in" style={{maxWidth:780}}>
+      <PageTitle>Habits</PageTitle>
+      <div style={{display:'flex',gap:10,marginBottom:20}}>
+        <InlineInput value={newHabit} onChange={e=>setNewHabit(e.target.value)} placeholder="Add a habit..." onKeyDown={e=>e.key==='Enter'&&addHabit()} style={{flex:1}}/>
+        <button onClick={addHabit} style={{padding:'9px 22px',borderRadius:12,background:C.rose,color:'#fff',border:'none',fontSize:13.5,fontWeight:500,cursor:'pointer'}}>Add</button>
+      </div>
+      <Card style={{padding:'16px 12px',overflowX:'auto'}}>
+        <div style={{display:'grid',gridTemplateColumns:`140px repeat(28, 1fr)`,gap:2,alignItems:'center',minWidth:600}}>
+          <div/>
+          {days.map((d,i)=><div key={i} style={{fontSize:8,color:C.textMuted,textAlign:'center',transform:'rotate(-45deg)',transformOrigin:'center'}}>{d.getDate()}</div>)}
+          {habits.map(h=>(
+            React.createElement(React.Fragment,{key:h.id},
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,color:C.text,paddingRight:8}},
+                React.createElement('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}},h.name),
+                React.createElement('span',{style:{fontSize:10,color:C.accent,flexShrink:0}},getStreak(h.id)>0?'🔥'+getStreak(h.id):''),
+                React.createElement('button',{onClick:()=>removeHabit(h.id),style:{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:11,lineHeight:1,padding:0,flexShrink:0}},'×')
+              ),
+              ...days.map((d,i)=>{
+                const dk=toDateKey(d);
+                const checked=!!log[`${h.id}_${dk}`];
+                return React.createElement('button',{key:i,onClick:()=>toggleDay(h.id,dk),style:{
+                  width:'100%',aspectRatio:'1',borderRadius:3,border:'none',cursor:'pointer',
+                  background:checked?C.rose:`${C.pink}40`,
+                  opacity:checked?1:0.4,
+                  transition:'all 0.12s',
+                  animation:checked?'checkPop 0.25s ease':'none',
+                }});
+              })
+            )
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+/* ── Eisenhower Matrix ──────────────────────────────────────────── */
+const EisenhowerMatrix = ({ storageKey='nylaos_tasks' }) => {
+  const [tasks, setTasks] = useState(()=>JSON.parse(localStorage.getItem(storageKey)||'[]').filter(t=>!t.done&&t.source!=='calendar'));
+  const [input, setInput] = useState('');
+  const [addQ, setAddQ] = useState('ui');
+  const save = t => { const all=JSON.parse(localStorage.getItem(storageKey)||'[]'); const other=all.filter(x=>x.done||x.source==='calendar'); setTasks(t); localStorage.setItem(storageKey,JSON.stringify([...t,...other])); };
+  const setQuadrant = (id, q) => { save(tasks.map(t=>t.id===id?{...t,quadrant:q}:t)); };
+  const addTask = () => { if(!input.trim()) return; save([...tasks,{id:Date.now(),text:input.trim(),done:false,quadrant:addQ,created:new Date().toISOString()}]); setInput(''); toast('Task added','success',1200); };
+  const complete = id => { save(tasks.map(t=>t.id===id?{...t,done:true,completedDate:toDateKey()}:t)); toast('Done ✓','success',1200); };
+  const quads = [
+    { key:'ui', label:'Do First', sub:'Urgent & Important', color:'#ea4335', bg:'#ea433512', icon:'🔥' },
+    { key:'ni', label:'Schedule', sub:'Not Urgent & Important', color:'#34a853', bg:'#34a85312', icon:'📅' },
+    { key:'un', label:'Delegate', sub:'Urgent & Not Important', color:'#fbbc04', bg:'#fbbc0412', icon:'📤' },
+    { key:'nn', label:'Eliminate', sub:'Not Urgent & Not Important', color:C.textMuted, bg:`${C.pink}20`, icon:'🗑' },
+  ];
+  return (
+    <div className="fade-in">
+      <PageTitle>Eisenhower Matrix</PageTitle>
+      <div style={{display:'flex',gap:8,marginBottom:16,alignItems:'center'}}>
+        <InlineInput value={input} onChange={e=>setInput(e.target.value)} placeholder="Add task..." onKeyDown={e=>e.key==='Enter'&&addTask()} style={{flex:1}}/>
+        <select value={addQ} onChange={e=>setAddQ(e.target.value)} style={{padding:'8px 10px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.rose,fontSize:12}}>
+          {quads.map(q=><option key={q.key} value={q.key}>{q.icon} {q.label}</option>)}
+        </select>
+        <button onClick={addTask} style={{padding:'9px 18px',borderRadius:12,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer'}}>Add</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+        {quads.map(q=>{
+          const items=tasks.filter(t=>!t.done&&(t.quadrant===q.key||(q.key==='ui'&&!t.quadrant)));
+          return (
+            <div key={q.key} style={{borderRadius:14,padding:14,background:q.bg,border:`1px solid ${q.color}30`,minHeight:180}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10}}>
+                <span style={{fontSize:14}}>{q.icon}</span>
+                <div>
+                  <div style={{fontSize:12.5,fontWeight:600,color:q.color}}>{q.label}</div>
+                  <div style={{fontSize:10,color:C.textMuted}}>{q.sub}</div>
+                </div>
+              </div>
+              {items.map(t=>(
+                <div key={t.id} className="card-hover" style={{padding:'8px 10px',borderRadius:8,background:C.card,border:`0.5px solid ${C.border}`,marginBottom:6,display:'flex',alignItems:'center',gap:8}}>
+                  <button onClick={()=>complete(t.id)} style={{width:16,height:16,borderRadius:4,border:`1.5px solid ${q.color}`,background:'transparent',cursor:'pointer',flexShrink:0}}/>
+                  <span style={{flex:1,fontSize:12,color:C.text}}>{t.text}</span>
+                  <select value={t.quadrant||'ui'} onChange={e=>setQuadrant(t.id,e.target.value)} style={{fontSize:10,padding:'2px 4px',borderRadius:4,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,cursor:'pointer'}}>
+                    {quads.map(qq=><option key={qq.key} value={qq.key}>{qq.icon}</option>)}
+                  </select>
+                </div>
+              ))}
+              {items.length===0&&<div style={{fontSize:11,color:C.textMuted,fontStyle:'italic',padding:4}}>Empty</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+/* ── Bored Bucket ──────────────────────────────────────────────── */
+const BoredBucket = () => {
+  const BK='nylaos_bored_bucket';
+  const [items, setItems] = useState(()=>JSON.parse(localStorage.getItem(BK)||'[]'));
+  const [input, setInput] = useState('');
+  const [expanded, setExpanded] = useState(null);
+  const [spinning, setSpinning] = useState(false);
+  const [picked, setPicked] = useState(null);
+  const save = i => { setItems(i); localStorage.setItem(BK,JSON.stringify(i)); };
+  const add = () => { if(!input.trim()) return; save([...items,{id:Date.now(),name:input.trim(),details:'',color:`hsl(${Math.random()*360},70%,85%)`}]); setInput(''); };
+  const updateDetails = (id, details) => { save(items.map(i=>i.id===id?{...i,details}:i)); };
+  const remove = id => { save(items.filter(i=>i.id!==id)); if(expanded===id) setExpanded(null); };
+  const spin = () => {
+    if(items.length===0) return;
+    setSpinning(true); setPicked(null);
+    let count=0;
+    const interval=setInterval(()=>{
+      setPicked(items[Math.floor(Math.random()*items.length)]);
+      count++;
+      if(count>15){ clearInterval(interval); setSpinning(false); toast('Do this one! 🎯','info',3000); }
+    },100);
+  };
+  return (
+    <div className="fade-in" style={{maxWidth:680}}>
+      <PageTitle>Bored Bucket</PageTitle>
+      <div style={{display:'flex',gap:10,marginBottom:16}}>
+        <InlineInput value={input} onChange={e=>setInput(e.target.value)} placeholder="Add something fun..." onKeyDown={e=>e.key==='Enter'&&add()} style={{flex:1}}/>
+        <button onClick={add} style={{padding:'9px 18px',borderRadius:12,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer'}}>Add</button>
+        <button onClick={spin} disabled={spinning||items.length===0} style={{padding:'9px 18px',borderRadius:12,background:C.accent,color:'#fff',border:'none',fontSize:13,cursor:'pointer',opacity:spinning?0.6:1}}>
+          {spinning?'🎰 Picking...':'🎲 Pick for me'}
+        </button>
+      </div>
+      {picked&&!spinning&&(
+        <Card style={{marginBottom:16,background:`${C.lavender}60`,border:`2px solid ${C.accent}`,textAlign:'center',padding:'20px 24px'}}>
+          <div style={{fontSize:11,color:C.textMuted,textTransform:'uppercase',letterSpacing:1,marginBottom:6}}>You should do...</div>
+          <div style={{fontSize:22,fontFamily:"'DM Serif Display',serif",color:C.rose}}>{picked.name}</div>
+          {picked.details&&<div style={{fontSize:13,color:C.text,marginTop:8}}>{picked.details}</div>}
+        </Card>
+      )}
+      <div style={{display:'flex',flexWrap:'wrap',gap:10}}>
+        {items.map(item=>(
+          <div key={item.id} onClick={()=>setExpanded(expanded===item.id?null:item.id)}
+            className="card-hover" style={{
+              padding:expanded===item.id?'14px 18px':'12px 20px',
+              borderRadius:expanded===item.id?16:50,
+              background:item.color||`${C.pink}60`,
+              border:`0.5px solid ${C.border}`,cursor:'pointer',
+              transition:'all 0.25s ease',
+              width:expanded===item.id?'100%':'auto',
+              maxWidth:expanded===item.id?400:'none',
+            }}>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:13.5,fontWeight:500,color:C.text}}>{item.name}</span>
+              {expanded===item.id&&(
+                <button onClick={e=>{e.stopPropagation();remove(item.id);}} style={{marginLeft:'auto',background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14}}>×</button>
+              )}
+            </div>
+            {expanded===item.id&&(
+              <div style={{marginTop:8}} onClick={e=>e.stopPropagation()}>
+                <textarea value={item.details||''} onChange={e=>updateDetails(item.id,e.target.value)}
+                  placeholder="Add details, links, notes..."
+                  style={{width:'100%',height:60,padding:'8px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'rgba(255,255,255,0.5)',color:C.text,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
+              </div>
+            )}
+          </div>
+        ))}
+        {items.length===0&&<div style={{fontSize:13,color:C.textMuted,fontStyle:'italic'}}>Add things you can do when bored — hobbies, projects, self-care ideas...</div>}
+      </div>
+    </div>
+  );
+};
+
+/* ── Voice Notes ───────────────────────────────────────────────── */
+const VoiceNotes = () => {
+  const [recording, setRecording] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [status, setStatus] = useState('');
+  const recRef = useRef(null);
+  const startRecording = () => {
+    if(!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)){
+      toast('Speech recognition not supported in this browser','error'); return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+    let final = '';
+    rec.onresult = e => {
+      let interim = '';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        if(e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
+        else interim += e.results[i][0].transcript;
+      }
+      setTranscript(final + interim);
+    };
+    rec.onerror = e => { setStatus('Error: '+e.error); setRecording(false); };
+    rec.onend = () => { if(recording) rec.start(); };
+    rec.start();
+    recRef.current = rec;
+    setRecording(true); setStatus('Listening...'); setTranscript('');
+  };
+  const stopRecording = () => {
+    if(recRef.current){ recRef.current.onend=null; recRef.current.stop(); }
+    setRecording(false); setStatus('');
+  };
+  const saveAsNote = () => {
+    if(!transcript.trim()){ toast('Nothing to save','error'); return; }
+    const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
+    const name='Voice Note · '+new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    pages.push({id:Date.now(),name,folderId:1,content:`<p>${transcript.trim().replace(/\n/g,'</p><p>')}</p>`,created:new Date().toISOString(),updated:new Date().toISOString()});
+    localStorage.setItem('nylaos_nb_pages',JSON.stringify(pages));
+    toast('Saved to Notebook','success');
+    setTranscript('');
+  };
+  return (
+    <div className="fade-in" style={{maxWidth:560}}>
+      <PageTitle>Voice Notes</PageTitle>
+      <Card style={{textAlign:'center',padding:'30px 24px'}}>
+        <button onClick={recording?stopRecording:startRecording} style={{
+          width:80,height:80,borderRadius:'50%',border:'none',cursor:'pointer',
+          background:recording?'#ea4335':C.rose,color:'#fff',fontSize:28,
+          boxShadow:recording?'0 0 0 8px #ea433530':`0 4px 18px ${C.rose}50`,
+          transition:'all 0.2s',animation:recording?'checkPop 1s ease infinite':'none',
+          display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 16px',
+        }}>{recording?'⏹':'🎙'}</button>
+        <div style={{fontSize:13,color:recording?'#ea4335':C.textMuted,fontWeight:500,marginBottom:16}}>
+          {recording?'Recording... tap to stop':'Tap to start recording'}
+        </div>
+        {status&&<div style={{fontSize:11,color:C.textMuted,marginBottom:8}}>{status}</div>}
+        {transcript&&(
+          <>
+            <div style={{textAlign:'left',padding:'14px 18px',borderRadius:12,background:C.pinkLight,border:`0.5px solid ${C.border}`,fontSize:13,color:C.text,lineHeight:1.7,marginBottom:14,minHeight:80,whiteSpace:'pre-wrap'}}>{transcript}</div>
+            <div style={{display:'flex',gap:8,justifyContent:'center'}}>
+              <button onClick={saveAsNote} style={{padding:'9px 20px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer'}}>Save to Notebook</button>
+              <button onClick={()=>setTranscript('')} style={{padding:'9px 20px',borderRadius:10,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:13,cursor:'pointer'}}>Clear</button>
+            </div>
+          </>
+        )}
+      </Card>
+    </div>
+  );
+};
+
+/* ── Dream Life Blueprint ──────────────────────────────────────── */
+const DreamLifeBlueprint = () => {
+  const BK='nylaos_blueprint';
+  const PILLARS=['Wealth','Health','Relationships','Career','Spirituality','Lifestyle','Education','Creativity'];
+  const [data, setData] = useState(()=>{
+    const saved=JSON.parse(localStorage.getItem(BK)||'null');
+    return saved||PILLARS.map(p=>({name:p,current:5,target:10}));
+  });
+  const [history, setHistory] = useState(()=>JSON.parse(localStorage.getItem(BK+'_history')||'[]'));
+  const save = d => { setData(d); localStorage.setItem(BK,JSON.stringify(d)); };
+  const saveSnapshot = () => {
+    const snap={date:new Date().toISOString().split('T')[0],data:JSON.parse(JSON.stringify(data))};
+    const h=[...history,snap];
+    setHistory(h); localStorage.setItem(BK+'_history',JSON.stringify(h));
+    toast('Snapshot saved','success');
+  };
+  const update = (i, field, val) => { const d=[...data]; d[i]={...d[i],[field]:Math.max(0,Math.min(10,parseInt(val)||0))}; save(d); };
+
+  // Radar chart SVG
+  const cx=150, cy=150, R=120, n=data.length;
+  const angleOf = i => (Math.PI*2*i/n) - Math.PI/2;
+  const pointAt = (i, v) => {
+    const a=angleOf(i), r=R*v/10;
+    return [cx+r*Math.cos(a), cy+r*Math.sin(a)];
+  };
+  const currentPath = data.map((d,i)=>pointAt(i,d.current).join(',')).join(' ');
+  const targetPath = data.map((d,i)=>pointAt(i,d.target).join(',')).join(' ');
+
+  return (
+    <div className="fade-in" style={{maxWidth:700}}>
+      <PageTitle>Dream Life Blueprint</PageTitle>
+      <div style={{display:'flex',gap:24,flexWrap:'wrap'}}>
+        {/* Radar Chart */}
+        <Card style={{flex:'1 1 300px',padding:16,display:'flex',flexDirection:'column',alignItems:'center'}}>
+          <svg width={300} height={300} viewBox="0 0 300 300">
+            {/* Grid rings */}
+            {[2,4,6,8,10].map(v=>(
+              <polygon key={v} points={data.map((_,i)=>pointAt(i,v).join(',')).join(' ')}
+                fill="none" stroke={C.border} strokeWidth={0.5} opacity={0.6}/>
+            ))}
+            {/* Axis lines */}
+            {data.map((_,i)=><line key={i} x1={cx} y1={cy} x2={pointAt(i,10)[0]} y2={pointAt(i,10)[1]} stroke={C.border} strokeWidth={0.5}/>)}
+            {/* Target area */}
+            <polygon points={targetPath} fill={`${C.accent}18`} stroke={C.accent} strokeWidth={1.5} strokeDasharray="4 3"/>
+            {/* Current area */}
+            <polygon points={currentPath} fill={`${C.rose}25`} stroke={C.rose} strokeWidth={2}/>
+            {/* Current dots */}
+            {data.map((d,i)=>{const[x,y]=pointAt(i,d.current); return <circle key={i} cx={x} cy={y} r={4} fill={C.rose}/>;})}
+            {/* Labels */}
+            {data.map((d,i)=>{
+              const[x,y]=pointAt(i,10.8);
+              return <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle" style={{fontSize:10,fill:C.text,fontFamily:'DM Sans'}}>{d.name}</text>;
+            })}
+          </svg>
+          <div style={{display:'flex',gap:16,marginTop:8,fontSize:11}}>
+            <span style={{display:'flex',alignItems:'center',gap:4}}><span style={{width:12,height:3,background:C.rose,borderRadius:2,display:'inline-block'}}/>Now</span>
+            <span style={{display:'flex',alignItems:'center',gap:4}}><span style={{width:12,height:3,background:C.accent,borderRadius:2,display:'inline-block',borderTop:'1px dashed'}}/>Dream</span>
+          </div>
+          <button onClick={saveSnapshot} style={{marginTop:12,padding:'7px 16px',borderRadius:8,background:`${C.accent}20`,border:`0.5px solid ${C.border}`,color:C.accent,fontSize:11,cursor:'pointer'}}>📸 Save Monthly Snapshot</button>
+        </Card>
+
+        {/* Sliders */}
+        <div style={{flex:'1 1 260px',display:'flex',flexDirection:'column',gap:10}}>
+          {data.map((d,i)=>(
+            <Card key={d.name} className="card-hover" style={{padding:'10px 14px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                <span style={{fontSize:12.5,fontWeight:500,color:C.text}}>{d.name}</span>
+                <span style={{fontSize:11,color:C.textMuted}}>{d.current} → {d.target}</span>
+              </div>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <span style={{fontSize:10,color:C.rose,width:28}}>Now</span>
+                <input type="range" min={0} max={10} value={d.current} onChange={e=>update(i,'current',e.target.value)}
+                  style={{flex:1,accentColor:C.rose}}/>
+                <span style={{fontSize:11,color:C.rose,width:16,textAlign:'right'}}>{d.current}</span>
+              </div>
+              <div style={{display:'flex',gap:8,alignItems:'center',marginTop:2}}>
+                <span style={{fontSize:10,color:C.accent,width:28}}>Goal</span>
+                <input type="range" min={0} max={10} value={d.target} onChange={e=>update(i,'target',e.target.value)}
+                  style={{flex:1,accentColor:C.accent}}/>
+                <span style={{fontSize:11,color:C.accent,width:16,textAlign:'right'}}>{d.target}</span>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>
+      {history.length>0&&(
+        <div style={{marginTop:20}}>
+          <SectionHeading>Past Snapshots</SectionHeading>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {history.slice(-6).map((snap,i)=>(
+              <button key={i} onClick={()=>{ save(snap.data); toast('Loaded snapshot from '+snap.date,'info'); }}
+                style={{padding:'6px 14px',borderRadius:10,background:`${C.pink}40`,border:`0.5px solid ${C.border}`,color:C.text,fontSize:11,cursor:'pointer'}}>
+                📅 {snap.date}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
   const [tasks, setTasks] = useState(()=>JSON.parse(localStorage.getItem(storageKey)||'[]'));
   const [input, setInput] = useState('');
-  const [expanded, setExpanded] = useState(null); // {id, mode:'date'|'goal'}
+  const [expanded, setExpanded] = useState(null);
   const [editTaskId, setEditTaskId] = useState(null);
   const [editTaskText, setEditTaskText] = useState('');
+  const [newTag, setNewTag] = useState('');
+  const [recurMenu, setRecurMenu] = useState(null);
+  const [recurText, setRecurText] = useState('');
+  const [recurFreq, setRecurFreq] = useState('weekly');
   const goals = JSON.parse(localStorage.getItem('nylaos_goals')||'[]');
 
   const save = t => { setTasks(t); localStorage.setItem(storageKey,JSON.stringify(t)); };
   const add = () => {
     if(!input.trim()) return;
-    save([...tasks,{id:Date.now(),text:input.trim(),done:false,created:new Date().toISOString()}]);
-    setInput('');
+    save([...tasks,{id:Date.now(),text:input.trim(),done:false,tag:newTag||null,created:new Date().toISOString()}]);
+    setInput(''); toast('Task added','success',1500);
   };
-  const toggle = id => { const nowDone=!tasks.find(t=>t.id===id)?.done; save(tasks.map(t=>t.id===id?{...t,done:nowDone,completedDate:nowDone?toDateKey():null}:t)); };
+  const toggle = id => {
+    const nowDone=!tasks.find(t=>t.id===id)?.done;
+    save(tasks.map(t=>t.id===id?{...t,done:nowDone,completedDate:nowDone?toDateKey():null}:t));
+    if(nowDone) toast('Task completed ✓','success',1500);
+  };
   const remove = id => {
     const t = tasks.find(x=>x.id===id);
     if (t) addToTrash('task', t.text, t, storageKey);
     save(tasks.filter(t=>t.id!==id));
     if(expanded?.id===id) setExpanded(null);
+  };
+  const setTag = (id, tag) => { save(tasks.map(t=>t.id===id?{...t,tag}:t)); };
+  const addRecurring = (text, freq, tag) => {
+    const now = new Date();
+    const newTasks = [];
+    const count = freq==='daily'?14:freq==='weekly'?12:6;
+    for(let i=0;i<count;i++){
+      const d = new Date(now);
+      if(freq==='daily') d.setDate(d.getDate()+i);
+      else if(freq==='weekly') d.setDate(d.getDate()+i*7);
+      else d.setMonth(d.getMonth()+i);
+      newTasks.push({id:Date.now()+i,text,done:false,tag:tag||null,calendarDate:toDateKey(d),recurring:freq,created:new Date().toISOString()});
+    }
+    save([...tasks,...newTasks]);
+    toast(`${count} recurring tasks created`,'success');
+    setRecurMenu(null);
   };
 
   const assignDate = (id, date) => {
@@ -1465,6 +2005,10 @@ const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
   };
 
   if (sub==='Recently Deleted') return <TrashPanel type="task" />;
+  if (sub==='Kanban') return <KanbanBoard storageKey={storageKey} />;
+  if (sub==='Eisenhower') return <EisenhowerMatrix storageKey={storageKey} />;
+  if (sub==='Habits') return <HabitTracker />;
+  if (sub==='Bored Bucket') return <BoredBucket />;
 
   const isCompleted = sub==='Completed';
   const filtered = isCompleted ? tasks.filter(t=>t.done && t.source!=='calendar') : tasks.filter(t=>!t.done && t.source!=='calendar');
@@ -1479,19 +2023,46 @@ const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
   return (
     <div className="fade-in" style={{ maxWidth:620 }}>
       <PageTitle>{sub}</PageTitle>
-      {!isCompleted && (
-        <div style={{ display:'flex', gap:10, marginBottom:20 }}>
+      {!isCompleted && (<>
+        <div style={{ display:'flex', gap:10, marginBottom:8 }}>
           <InlineInput value={input} onChange={e=>setInput(e.target.value)} placeholder="Add a task — press Enter..."
             onKeyDown={e=>e.key==='Enter'&&add()} style={{ flex:1 }} />
           <button onClick={add} style={{ padding:'9px 22px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:'pointer' }}>Add</button>
         </div>
-      )}
+        <div style={{ display:'flex', gap:6, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
+          <span style={{fontSize:11,color:C.textMuted}}>Tag:</span>
+          <button onClick={()=>setNewTag('')} style={{fontSize:11,padding:'3px 9px',borderRadius:10,border:`0.5px solid ${!newTag?C.rose:C.border}`,background:!newTag?`${C.rose}20`:'transparent',color:!newTag?C.rose:C.textMuted,cursor:'pointer'}}>None</button>
+          {Object.entries(TAG_COLORS).map(([k,v])=>(
+            <button key={k} onClick={()=>setNewTag(k)} style={{fontSize:11,padding:'3px 9px',borderRadius:10,border:`0.5px solid ${newTag===k?v.bg:C.border}`,background:newTag===k?v.light:'transparent',color:newTag===k?v.bg:C.textMuted,cursor:'pointer'}}>{v.label}</button>
+          ))}
+          <span style={{color:C.border,margin:'0 4px'}}>|</span>
+          <button onClick={()=>setRecurMenu(recurMenu?null:'open')} style={{fontSize:11,padding:'3px 9px',borderRadius:10,border:`0.5px solid ${C.border}`,background:recurMenu?`${C.accent}20`:'transparent',color:recurMenu?C.accent:C.textMuted,cursor:'pointer'}}>🔁 Recurring</button>
+        </div>
+        {recurMenu && (
+          <Card style={{padding:'14px 16px',marginBottom:16}}>
+            <div style={{fontSize:12,color:C.text,fontWeight:500,marginBottom:8}}>Create recurring task</div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+              <input value={recurText} onChange={e=>setRecurText(e.target.value)} placeholder="Task name..."
+                style={{flex:1,padding:'7px 12px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.rose,fontSize:12.5,fontFamily:'inherit',minWidth:160}}/>
+              <select value={recurFreq} onChange={e=>setRecurFreq(e.target.value)}
+                style={{padding:'7px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.rose,fontSize:12}}>
+                <option value="daily">Daily (14 days)</option>
+                <option value="weekly">Weekly (12 wks)</option>
+                <option value="monthly">Monthly (6 mo)</option>
+              </select>
+              <button onClick={()=>{if(recurText.trim()){addRecurring(recurText.trim(),recurFreq,newTag);setRecurText('');}}}
+                style={{padding:'7px 16px',borderRadius:8,background:C.accent,color:'#fff',border:'none',fontSize:12,cursor:'pointer'}}>Create</button>
+            </div>
+          </Card>
+        )}
+      </>)}
       <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
         {filtered.map(t=>{
           const isExp = expanded?.id===t.id;
           const linkedGoal = t.goalId ? goals.find(g=>g.id===t.goalId) : null;
+          const tagInfo = t.tag ? TAG_COLORS[t.tag] : null;
           return (
-            <Card key={t.id} style={{ padding:'12px 16px' }}>
+            <Card key={t.id} className="card-hover" style={{ padding:'12px 16px', borderLeft:tagInfo?`3px solid ${tagInfo.bg}`:'none' }}>
               <div style={{ display:'flex', alignItems:'center', gap:12 }}>
                 <Checkbox checked={t.done} onChange={()=>toggle(t.id)} />
                 <div style={{ flex:1 }}>
@@ -1504,14 +2075,16 @@ const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
                     <div onClick={()=>!t.done&&startEditTask(t)} title={t.done?'':'Click to edit'}
                       style={{ fontSize:13.5, color:t.done?C.textMuted:C.text, textDecoration:t.done?'line-through':'none', cursor:t.done?'default':'text' }}>{t.text}</div>
                   )}
-                  {(t.calendarDate||linkedGoal) && (
-                    <div style={{ display:'flex', gap:5, marginTop:4, flexWrap:'wrap' }}>
-                      {t.calendarDate && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:10, background:`${C.pink}60`, color:C.rose }}>📅 {t.calendarDate}</span>}
-                      {linkedGoal && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:10, background:`${C.lavender}80`, color:C.rose }}>🎯 {linkedGoal.title}</span>}
-                    </div>
-                  )}
+                  <div style={{ display:'flex', gap:5, marginTop:4, flexWrap:'wrap' }}>
+                    {tagInfo && <span style={{ fontSize:10.5, padding:'2px 8px', borderRadius:10, background:tagInfo.light, color:tagInfo.bg }}>{tagInfo.label}</span>}
+                    {t.recurring && <span style={{ fontSize:10.5, padding:'2px 8px', borderRadius:10, background:`${C.accent}20`, color:C.accent }}>🔁 {t.recurring}</span>}
+                    {t.calendarDate && <span style={{ fontSize:10.5, padding:'2px 8px', borderRadius:10, background:`${C.pink}60`, color:C.rose }}>📅 {t.calendarDate}</span>}
+                    {linkedGoal && <span style={{ fontSize:10.5, padding:'2px 8px', borderRadius:10, background:`${C.lavender}80`, color:C.rose }}>🎯 {linkedGoal.title}</span>}
+                  </div>
                 </div>
                 <div style={{ display:'flex', gap:4, alignItems:'center', flexShrink:0 }}>
+                  <button onClick={()=>setExpanded(isExp&&expanded.mode==='tag'?null:{id:t.id,mode:'tag'})}
+                    title="Set tag" style={BtnStyle(isExp&&expanded.mode==='tag')}>🏷</button>
                   <button onClick={()=>setExpanded(isExp&&expanded.mode==='date'?null:{id:t.id,mode:'date'})}
                     title="Assign to Calendar" style={BtnStyle(isExp&&expanded.mode==='date')}>📅</button>
                   <button onClick={()=>setExpanded(isExp&&expanded.mode==='goal'?null:{id:t.id,mode:'goal'})}
@@ -1520,6 +2093,14 @@ const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
                     onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.6}>×</button>
                 </div>
               </div>
+              {isExp && expanded.mode==='tag' && (
+                <div style={{ marginTop:9, paddingTop:9, borderTop:`0.5px solid ${C.border}`, display:'flex', gap:6, flexWrap:'wrap' }}>
+                  <button onClick={()=>{setTag(t.id,null);setExpanded(null);}} style={{fontSize:11,padding:'4px 10px',borderRadius:8,background:!t.tag?`${C.rose}20`:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,cursor:'pointer'}}>None</button>
+                  {Object.entries(TAG_COLORS).map(([k,v])=>(
+                    <button key={k} onClick={()=>{setTag(t.id,k);setExpanded(null);}} style={{fontSize:11,padding:'4px 10px',borderRadius:8,background:t.tag===k?v.light:'transparent',border:`0.5px solid ${t.tag===k?v.bg:C.border}`,color:v.bg,cursor:'pointer'}}>{v.label}</button>
+                  ))}
+                </div>
+              )}
               {isExp && expanded.mode==='date' && (
                 <div style={{ marginTop:9, paddingTop:9, borderTop:`0.5px solid ${C.border}`, display:'flex', gap:8, alignItems:'center' }}>
                   <span style={{ fontSize:12, color:C.textLight }}>Date:</span>
@@ -1995,6 +2576,27 @@ const NotebookPanel = ({ sub }) => {
     savePages([...pages,pg]); setActiveFid(2); setActivePid(pg.id); setHeaderTitle(pg.name);
   };
 
+  const NB_TEMPLATES = {
+    'Meeting Notes': `<h2>Meeting Notes</h2><p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p><p><strong>Attendees:</strong></p><ul><li></li></ul><h3>Agenda</h3><ul><li></li></ul><h3>Discussion</h3><p><br></p><h3>Action Items</h3><ul><li></li></ul>`,
+    'Business Idea': `<h2>Business Idea</h2><h3>Concept</h3><p><br></p><h3>Target Audience</h3><p><br></p><h3>Revenue Model</h3><p><br></p><h3>Competitive Advantage</h3><p><br></p><h3>Next Steps</h3><ul><li></li></ul>`,
+    'Daily Journal': `<h2>${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</h2><h3>How I'm Feeling</h3><p><br></p><h3>Wins Today</h3><ul><li></li></ul><h3>Challenges</h3><p><br></p><h3>Gratitude</h3><ul><li></li></ul><h3>Tomorrow's Intention</h3><p><br></p>`,
+    'Course Notes': `<h2>Course Notes</h2><p><strong>Course:</strong></p><p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p><h3>Key Concepts</h3><ul><li></li></ul><h3>Notes</h3><p><br></p><h3>Questions</h3><ul><li></li></ul><h3>Summary</h3><p><br></p>`,
+    'Project Plan': `<h2>Project Plan</h2><h3>Objective</h3><p><br></p><h3>Timeline</h3><ul><li><strong>Phase 1:</strong></li><li><strong>Phase 2:</strong></li><li><strong>Phase 3:</strong></li></ul><h3>Resources Needed</h3><ul><li></li></ul><h3>Success Metrics</h3><p><br></p>`,
+    'Weekly Review': `<h2>Weekly Review</h2><p><strong>Week of:</strong> ${new Date().toLocaleDateString()}</p><h3>Wins This Week</h3><ul><li></li></ul><h3>What Didn't Work</h3><ul><li></li></ul><h3>What I'm Avoiding</h3><p><br></p><h3>Next Week's #1 Priority</h3><p><br></p><h3>Energy Check</h3><p>How am I feeling? What do I need more/less of?</p>`,
+    'Scripting': `<h2>My Dream Life ✦</h2><p><em>Write in present tense as if it's already real...</em></p><p><br></p><p>I wake up in...</p><p>My morning looks like...</p><p>My business is...</p><p>I feel...</p><p>My relationships are...</p><p>My bank account shows...</p><p>I am so grateful for...</p>`,
+    'Brain Dump': `<h2>Brain Dump</h2><p><em>Get everything out of your head. No filter, no structure, just dump.</em></p><p><br></p><p><br></p><p><br></p><hr/><h3>After dumping — sort into:</h3><ul><li><strong>Tasks:</strong></li><li><strong>Ideas:</strong></li><li><strong>Worries to release:</strong></li><li><strong>Things to research:</strong></li></ul>`,
+    'Content Ideas': `<h2>Content Ideas</h2><h3>Instagram</h3><ul><li></li></ul><h3>TikTok</h3><ul><li></li></ul><h3>Blog / Long-form</h3><ul><li></li></ul><h3>Captions / Hooks</h3><p><br></p><h3>Content Pillars</h3><ul><li>Educational:</li><li>Inspirational:</li><li>Behind the scenes:</li><li>Promotional:</li></ul>`,
+    'Book Notes': `<h2>Book Notes</h2><p><strong>Title:</strong></p><p><strong>Author:</strong></p><p><strong>Rating:</strong> /10</p><h3>Key Ideas</h3><ul><li></li></ul><h3>Favorite Quotes</h3><blockquote><p></p></blockquote><h3>How This Applies to My Life</h3><p><br></p><h3>Action Items</h3><ul><li></li></ul>`,
+    'Letter to Future Self': `<h2>Dear Future Nyla,</h2><p><em>${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</em></p><p><br></p><p>Right now I'm feeling...</p><p>I'm working on...</p><p>I'm dreaming about...</p><p>I hope by the time you read this...</p><p>Don't forget...</p><p><br></p><p>With love,</p><p>Present You ✦</p>`,
+    'Shadow Work': `<h2>Shadow Work</h2><p><em>${new Date().toLocaleDateString()}</em></p><h3>What triggered me today?</h3><p><br></p><h3>What pattern does this remind me of?</h3><p><br></p><h3>What am I afraid of underneath this?</h3><p><br></p><h3>What would my highest self say?</h3><p><br></p><h3>Affirmation to release this:</h3><p><br></p>`,
+  };
+  const addFromTemplate = (templateName) => {
+    const pg = {id:Date.now(),name:templateName,folderId:activeFid,content:NB_TEMPLATES[templateName],created:new Date().toISOString(),updated:new Date().toISOString()};
+    savePages([...pages,pg]); setActivePid(pg.id); setHeaderTitle(templateName);
+    toast('Created from template','success',1500);
+  };
+  const [showTemplates, setShowTemplates] = useState(false);
+
   const uploadFiles = async (files) => {
     const mdToHtml = (text) => {
       const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -2429,6 +3031,7 @@ const NotebookPanel = ({ sub }) => {
         <div style={{padding:'10px 10px 6px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:4}}>
           <button onClick={addDailyNote} style={{flex:1,padding:'5px 8px',borderRadius:8,background:`${C.lavender}70`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',textAlign:'left',fontWeight:500}}>📅 Daily Note</button>
           <button onClick={()=>{setShowSearch(s=>!s);setSearchQ('');}} style={{padding:'5px 8px',borderRadius:8,background:showSearch?C.accent:'transparent',border:`0.5px solid ${C.border}`,color:showSearch?'#fff':C.textMuted,fontSize:12,cursor:'pointer'}} title="Search notes">🔍</button>
+          <button onClick={()=>setShowTemplates(s=>!s)} style={{padding:'5px 8px',borderRadius:8,background:showTemplates?C.accent:'transparent',border:`0.5px solid ${C.border}`,color:showTemplates?'#fff':C.textMuted,fontSize:12,cursor:'pointer'}} title="New from template">📋</button>
           <button onClick={()=>fileInputRef.current&&fileInputRef.current.click()} style={{padding:'5px 8px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:12,cursor:'pointer'}} title="Upload file(s) to notebook">📎</button>
           <input ref={fileInputRef} type="file" multiple accept=".txt,.md,.pdf,.csv,.doc,.docx" style={{display:'none'}} onChange={e=>{if(e.target.files?.length)uploadFiles(Array.from(e.target.files));e.target.value='';}}/>
           <button onClick={()=>setShowGraph(g=>!g)} style={{padding:'5px 8px',borderRadius:8,background:showGraph?C.rose:'transparent',border:`0.5px solid ${C.border}`,color:showGraph?'#fff':C.textMuted,fontSize:13,cursor:'pointer',lineHeight:1}} title="Graph view">⬡</button>
@@ -2438,6 +3041,19 @@ const NotebookPanel = ({ sub }) => {
           <div style={{padding:'6px 10px',borderBottom:`0.5px solid ${C.border}`}}>
             <input autoFocus value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search notes..."
               style={{width:'100%',padding:'5px 9px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit'}}/>
+          </div>
+        )}
+
+        {showTemplates && (
+          <div style={{padding:'6px 10px',borderBottom:`0.5px solid ${C.border}`}}>
+            <div style={{fontSize:9.5,color:C.textMuted,fontWeight:700,letterSpacing:0.8,textTransform:'uppercase',marginBottom:4}}>Templates</div>
+            {Object.keys(NB_TEMPLATES).map(name=>(
+              <button key={name} onClick={()=>{addFromTemplate(name);setShowTemplates(false);}}
+                style={{display:'block',width:'100%',padding:'5px 8px',borderRadius:7,textAlign:'left',background:'transparent',border:'none',color:C.text,fontSize:11.5,cursor:'pointer',marginBottom:2}}
+                onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}50`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                {name}
+              </button>
+            ))}
           </div>
         )}
 
@@ -5044,7 +5660,8 @@ const AppearancePanel = () => {
   const apply = () => {
     localStorage.setItem('nylaos_appearance', JSON.stringify(prefs));
     setSaved(true);
-    setTimeout(() => location.reload(), 500);
+    toast('Appearance updated','success',1500);
+    setTimeout(() => location.reload(), 600);
   };
 
   const accent = prefs.accent || 'pink';
@@ -5105,6 +5722,33 @@ const AppearancePanel = () => {
           {[{id:'small',label:'Small'},{id:'default',label:'Default'},{id:'large',label:'Large'}].map(f => (
             <button key={f.id} onClick={()=>update('fontSize', f.id)} style={btnSt(fontSize===f.id)}>{f.label}</button>
           ))}
+        </div>
+      </Card>
+
+      {/* Wallpaper */}
+      <Card style={{ marginBottom:14 }}>
+        <SectionHeading>Wallpaper</SectionHeading>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:10 }}>
+          {[
+            { id:'', label:'None', bg:'transparent' },
+            { id:'gradient1', label:'Sunset', bg:'linear-gradient(135deg,#fce4ec,#f3e5f5,#e8eaf6)' },
+            { id:'gradient2', label:'Ocean', bg:'linear-gradient(135deg,#e0f2f1,#e1f5fe,#ede7f6)' },
+            { id:'gradient3', label:'Blush', bg:'linear-gradient(135deg,#fce4ec,#fff3e0,#fce4ec)' },
+            { id:'gradient4', label:'Twilight', bg:'linear-gradient(135deg,#1a0a2e,#2d1450,#120820)' },
+            { id:'gradient5', label:'Forest', bg:'linear-gradient(135deg,#1b3a2d,#0d2818,#2a4a3a)' },
+          ].map(w=>(
+            <button key={w.id} onClick={()=>update('wallpaper',w.id)}
+              style={{width:52,height:36,borderRadius:8,border:`2px solid ${(prefs.wallpaper||'')===w.id?C.rose:C.border}`,
+                background:w.bg||C.cream,cursor:'pointer',position:'relative',overflow:'hidden'}}>
+              <span style={{position:'absolute',bottom:1,left:0,right:0,textAlign:'center',fontSize:8,color:(prefs.wallpaper||'')===w.id?C.rose:C.textMuted}}>{w.label}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <span style={{fontSize:12,color:C.textMuted}}>Custom URL:</span>
+          <input value={prefs.wallpaperUrl||''} onChange={e=>update('wallpaperUrl',e.target.value)}
+            placeholder="https://example.com/image.jpg"
+            style={{flex:1,padding:'6px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit'}}/>
         </div>
       </Card>
 
@@ -5555,7 +6199,7 @@ const SettingsPanel = ({ sub }) => {
 /* ── Router ─────────────────────────────────────────────────────── */
 const MainContent = ({ navId, sub, onRestoreBiz }) => (
   <div key={`${navId}__${sub}`} className="fade-in">
-    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:<FocusMode/>)}
+    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Dream Life'?<DreamLifeBlueprint/>:<FocusMode/>)}
     {navId==='calendar'   && <CalendarPanel sub={sub} />}
     {navId==='tasks'      && <TasksPanel sub={sub} />}
     {navId==='period'     && <PeriodPanel sub={sub} />}
@@ -5699,6 +6343,7 @@ const FloatingChat = () => {
   const sessionId = useRef(null);
   const endRef = useRef(null);
   useEffect(()=>{ if(open||fullscreen) endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,open,fullscreen]);
+  useEffect(()=>{ window._openFloatingChat=()=>setOpen(true); return ()=>{ delete window._openFloatingChat; }; },[]);
 
   const send = async () => {
     if (!input.trim()||loading) return;
@@ -5875,6 +6520,107 @@ const MobileSubTabs = ({ navItem, activeSub, onSubSelect }) => {
   );
 };
 
+/* ── Quick Add FAB ──────────────────────────────────────────────── */
+const QuickAddFAB = ({ onNavigate }) => {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState(null); // 'task','note','event','ai',null
+  const [val, setVal] = useState('');
+  const [aiReply, setAiReply] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const ref = useRef(null);
+  useEffect(()=>{
+    if(!open) return;
+    const h=e=>{ if(ref.current&&!ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown',h); return ()=>document.removeEventListener('mousedown',h);
+  },[open]);
+  const submit = async () => {
+    if(!val.trim()) return;
+    if(mode==='task'){
+      const t=JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
+      t.push({id:Date.now(),text:val.trim(),done:false,created:new Date().toISOString()});
+      localStorage.setItem('nylaos_tasks',JSON.stringify(t));
+      toast('Task added','success',1500);
+    } else if(mode==='event'){
+      const e=JSON.parse(localStorage.getItem('nylaos_events')||'[]');
+      e.push({id:Date.now(),date:toDateKey(),text:val.trim()});
+      localStorage.setItem('nylaos_events',JSON.stringify(e));
+      toast('Event added to today','success',1500);
+    } else if(mode==='note'){
+      const p=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
+      p.push({id:Date.now(),name:val.trim(),folderId:1,content:'<p><br></p>',created:new Date().toISOString(),updated:new Date().toISOString()});
+      localStorage.setItem('nylaos_nb_pages',JSON.stringify(p));
+      toast('Note created','success',1500);
+    } else if(mode==='ai'){
+      const apiKey=localStorage.getItem('nylaos_api_key');
+      if(!apiKey){ toast('Add API key in Settings first','error'); setVal(''); return; }
+      setAiLoading(true);
+      try{
+        const res=await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+          body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,system:'You are Nyla\'s quick AI assistant. Be concise and helpful. Max 2-3 sentences.',messages:[{role:'user',content:val.trim()}]}),
+        });
+        const data=await res.json();
+        setAiReply(data.content?.[0]?.text||'Sorry, I had trouble.');
+      }catch(e){ setAiReply('Connection error.'); }
+      setAiLoading(false); setVal(''); return;
+    }
+    setVal(''); setMode(null); setOpen(false);
+  };
+  const actions = [
+    { key:'task', icon:'✓', label:'Task', color:C.rose },
+    { key:'note', icon:'📝', label:'Note', color:C.accent },
+    { key:'event', icon:'📅', label:'Event', color:'#4285f4' },
+    { key:'ai', icon:'✦', label:'AI Chat', color:C.roseDark },
+  ];
+  return (
+    <div ref={ref} style={{position:'fixed',bottom:24,left:24,zIndex:999,display:'flex',flexDirection:'column-reverse',alignItems:'flex-start',gap:8}}>
+      <button onClick={()=>{setOpen(o=>!o);setMode(null);setVal('');}} style={{
+        width:48,height:48,borderRadius:'50%',background:C.rose,border:'none',color:'#fff',fontSize:24,cursor:'pointer',
+        boxShadow:`0 4px 18px ${C.rose}70`,display:'flex',alignItems:'center',justifyContent:'center',
+        transition:'all 0.2s',transform:open?'rotate(45deg)':'none',
+      }}>+</button>
+      {open && !mode && (
+        <div style={{display:'flex',flexDirection:'column',gap:6,animation:'toastIn 0.2s ease'}}>
+          {actions.map(a=>(
+            <button key={a.key} onClick={()=>{
+              setMode(a.key);
+            }} style={{
+              display:'flex',alignItems:'center',gap:10,padding:'8px 16px',borderRadius:12,
+              background:C.card,border:`0.5px solid ${C.border}`,cursor:'pointer',
+              boxShadow:`0 4px 14px rgba(0,0,0,0.08)`,transition:'all 0.15s',
+            }} onMouseEnter={e=>e.currentTarget.style.transform='translateX(4px)'} onMouseLeave={e=>e.currentTarget.style.transform='none'}>
+              <span style={{width:28,height:28,borderRadius:8,background:a.color,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600}}>{a.icon}</span>
+              <span style={{fontSize:12.5,color:C.text,fontWeight:500}}>{a.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {open && mode && (
+        <div style={{padding:'12px 14px',borderRadius:14,background:C.card,border:`0.5px solid ${C.border}`,boxShadow:`0 6px 20px rgba(0,0,0,0.1)`,width:mode==='ai'?320:260,animation:'toastIn 0.2s ease'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+            <div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:'uppercase',letterSpacing:0.5}}>
+              {mode==='ai'?'Ask AI ✦':`Quick ${mode}`}
+            </div>
+            <button onClick={()=>{setMode(null);setAiReply('');}} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14,lineHeight:1}}>×</button>
+          </div>
+          {aiReply && mode==='ai' && (
+            <div style={{padding:'8px 12px',borderRadius:10,background:`${C.lavender}60`,color:C.text,fontSize:12.5,lineHeight:1.6,marginBottom:8,whiteSpace:'pre-wrap'}}>{aiReply}</div>
+          )}
+          {aiLoading && mode==='ai' && (
+            <div style={{padding:'8px 12px',borderRadius:10,background:`${C.lavender}60`,color:C.textMuted,fontSize:12.5,marginBottom:8}}>✦ thinking...</div>
+          )}
+          <div style={{display:'flex',gap:6}}>
+            <input autoFocus value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')submit();if(e.key==='Escape'){setMode(null);setAiReply('');}}}
+              placeholder={mode==='task'?'What needs doing?':mode==='note'?'Note title...':mode==='ai'?'Ask anything...':'Event description...'}
+              style={{flex:1,padding:'8px 12px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>
+            <button onClick={submit} disabled={aiLoading} style={{padding:'8px 14px',borderRadius:8,background:aiLoading?C.textMuted:C.rose,color:'#fff',border:'none',fontSize:12,cursor:'pointer'}}>{mode==='ai'?'↑':'Add'}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* ── App ────────────────────────────────────────────────────────── */
 const App = () => {
   const isMobile = useIsMobile();
@@ -5934,7 +6680,12 @@ const App = () => {
   const mainPadding = isNotebook ? '0' : isMobile ? '16px 14px 20px' : '28px 32px';
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:C.cream }}>
+    <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:(()=>{
+      const WALLPAPERS = {gradient1:'linear-gradient(135deg,#fce4ec,#f3e5f5,#e8eaf6)',gradient2:'linear-gradient(135deg,#e0f2f1,#e1f5fe,#ede7f6)',gradient3:'linear-gradient(135deg,#fce4ec,#fff3e0,#fce4ec)',gradient4:'linear-gradient(135deg,#1a0a2e,#2d1450,#120820)',gradient5:'linear-gradient(135deg,#1b3a2d,#0d2818,#2a4a3a)'};
+      if(_ap.wallpaperUrl) return `url(${_ap.wallpaperUrl}) center/cover fixed`;
+      if(_ap.wallpaper&&WALLPAPERS[_ap.wallpaper]) return WALLPAPERS[_ap.wallpaper];
+      return C.cream;
+    })() }}>
       <TopBar />
       <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
         {!isMobile && (
@@ -5955,10 +6706,9 @@ const App = () => {
           <MainContent navId={activeNav} sub={activeSub} onRestoreBiz={restoreBiz} />
         </main>
       </div>
-      {isMobile
-        ? <MobileBottomNav activeNav={activeNav} onNavSelect={handleNavSelect} />
-        : <FloatingChat />
-      }
+      {isMobile && <MobileBottomNav activeNav={activeNav} onNavSelect={handleNavSelect} />}
+      <QuickAddFAB onNavigate={(nav, sub) => { setActiveNav(nav); if (sub) setActiveSub(sub); }} />
+      <ToastContainer />
     </div>
   );
 };
