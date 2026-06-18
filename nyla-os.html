@@ -486,6 +486,7 @@ const NAV = [
   { id:'calendar',   label:'Calendar',   sub:['Monthly','Daily','Weekly','Quarterly','Yearly'] },
   { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Kanban','Eisenhower','Habits','Bored Bucket','Projects','Completed','Recently Deleted'] },
   { id:'period',     label:'Period',     sub:['Cycle Overview','Phase Log','Symptoms','Learn'] },
+  { id:'ideas',      label:'Ideas',      sub:[] },
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Recently Deleted'] },
   { id:'business',   label:'Business',   sub:['Lunar Love','Halo House Collective Co.','Love Sativa','Dropshipping'] },
@@ -562,6 +563,7 @@ const icons = {
   calendar:      `<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>`,
   tasks:         `<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>`,
   period:        `<path d="M12 2.69l5.66 5.66a8 8 0 11-11.31 0z"/>`,
+  ideas:         `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/><line x1="12" y1="17.77" x2="12" y2="22"/>`,
   notebook:      `<path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>`,
   business:      `<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/>`,
   cosmic:        `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>`,
@@ -1839,101 +1841,103 @@ const VoiceNotes = () => {
 /* ── Dream Life Blueprint ──────────────────────────────────────── */
 const DreamLifeBlueprint = () => {
   const BK='nylaos_blueprint';
-  const PILLARS=['Wealth','Health','Relationships','Career','Spirituality','Lifestyle','Education','Creativity'];
+  const PILLARS=[
+    {name:'Wealth',emoji:'💰',prompt:'What does financial freedom look like? Income, savings, investments, lifestyle...'},
+    {name:'Health',emoji:'🌿',prompt:'How does your healthiest self look and feel? Body, energy, nutrition, movement...'},
+    {name:'Relationships',emoji:'💕',prompt:'Describe your ideal relationships — romantic, family, friendships, community...'},
+    {name:'Career',emoji:'🚀',prompt:'What does your dream career/business empire look like? Impact, income, freedom...'},
+    {name:'Spirituality',emoji:'✨',prompt:'How do you connect with yourself and the universe? Rituals, beliefs, inner peace...'},
+    {name:'Lifestyle',emoji:'🏡',prompt:'Paint your dream daily life — where you live, what you wear, how you spend your time...'},
+    {name:'Education',emoji:'📚',prompt:'What are you learning and mastering? Skills, knowledge, personal growth...'},
+    {name:'Creativity',emoji:'🎨',prompt:'How does creativity flow through your life? Art, expression, innovation...'},
+  ];
   const [data, setData] = useState(()=>{
     const saved=JSON.parse(localStorage.getItem(BK)||'null');
-    return saved||PILLARS.map(p=>({name:p,current:5,target:10}));
+    return saved||PILLARS.map(p=>({name:p.name,emoji:p.emoji,prompt:p.prompt,current:5,target:10,journalNow:'',journalDream:''}));
   });
-  const [history, setHistory] = useState(()=>JSON.parse(localStorage.getItem(BK+'_history')||'[]'));
+  const [activePillar, setActivePillar] = useState(0);
   const save = d => { setData(d); localStorage.setItem(BK,JSON.stringify(d)); };
-  const saveSnapshot = () => {
-    const snap={date:new Date().toISOString().split('T')[0],data:JSON.parse(JSON.stringify(data))};
-    const h=[...history,snap];
-    setHistory(h); localStorage.setItem(BK+'_history',JSON.stringify(h));
-    toast('Snapshot saved','success');
-  };
-  const update = (i, field, val) => { const d=[...data]; d[i]={...d[i],[field]:Math.max(0,Math.min(10,parseInt(val)||0))}; save(d); };
+  const update = (i, field, val) => { const d=[...data]; d[i]={...d[i],[field]:val}; save(d); };
+  const p = data[activePillar];
 
-  // Radar chart SVG
-  const cx=150, cy=150, R=120, n=data.length;
+  // Mini radar chart
+  const cx=90, cy=90, R=70, n=data.length;
   const angleOf = i => (Math.PI*2*i/n) - Math.PI/2;
-  const pointAt = (i, v) => {
-    const a=angleOf(i), r=R*v/10;
-    return [cx+r*Math.cos(a), cy+r*Math.sin(a)];
-  };
+  const pointAt = (i, v) => { const a=angleOf(i), r=R*v/10; return [cx+r*Math.cos(a), cy+r*Math.sin(a)]; };
   const currentPath = data.map((d,i)=>pointAt(i,d.current).join(',')).join(' ');
   const targetPath = data.map((d,i)=>pointAt(i,d.target).join(',')).join(' ');
 
   return (
-    <div className="fade-in" style={{maxWidth:700}}>
+    <div className="fade-in" style={{maxWidth:760}}>
       <PageTitle>Dream Life Blueprint</PageTitle>
-      <div style={{display:'flex',gap:24,flexWrap:'wrap'}}>
-        {/* Radar Chart */}
-        <Card style={{flex:'1 1 300px',padding:16,display:'flex',flexDirection:'column',alignItems:'center'}}>
-          <svg width={300} height={300} viewBox="0 0 300 300">
-            {/* Grid rings */}
-            {[2,4,6,8,10].map(v=>(
-              <polygon key={v} points={data.map((_,i)=>pointAt(i,v).join(',')).join(' ')}
-                fill="none" stroke={C.border} strokeWidth={0.5} opacity={0.6}/>
-            ))}
-            {/* Axis lines */}
-            {data.map((_,i)=><line key={i} x1={cx} y1={cy} x2={pointAt(i,10)[0]} y2={pointAt(i,10)[1]} stroke={C.border} strokeWidth={0.5}/>)}
-            {/* Target area */}
-            <polygon points={targetPath} fill={`${C.accent}18`} stroke={C.accent} strokeWidth={1.5} strokeDasharray="4 3"/>
-            {/* Current area */}
-            <polygon points={currentPath} fill={`${C.rose}25`} stroke={C.rose} strokeWidth={2}/>
-            {/* Current dots */}
-            {data.map((d,i)=>{const[x,y]=pointAt(i,d.current); return <circle key={i} cx={x} cy={y} r={4} fill={C.rose}/>;})}
-            {/* Labels */}
-            {data.map((d,i)=>{
-              const[x,y]=pointAt(i,10.8);
-              return <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle" style={{fontSize:10,fill:C.text,fontFamily:'DM Sans'}}>{d.name}</text>;
-            })}
-          </svg>
-          <div style={{display:'flex',gap:16,marginTop:8,fontSize:11}}>
-            <span style={{display:'flex',alignItems:'center',gap:4}}><span style={{width:12,height:3,background:C.rose,borderRadius:2,display:'inline-block'}}/>Now</span>
-            <span style={{display:'flex',alignItems:'center',gap:4}}><span style={{width:12,height:3,background:C.accent,borderRadius:2,display:'inline-block',borderTop:'1px dashed'}}/>Dream</span>
-          </div>
-          <button onClick={saveSnapshot} style={{marginTop:12,padding:'7px 16px',borderRadius:8,background:`${C.accent}20`,border:`0.5px solid ${C.border}`,color:C.accent,fontSize:11,cursor:'pointer'}}>📸 Save Monthly Snapshot</button>
-        </Card>
+      <div style={{fontSize:13,color:C.textMuted,marginBottom:20,fontStyle:'italic'}}>Define your dream life across every pillar. Write in present tense — as if it's already real.</div>
 
-        {/* Sliders */}
-        <div style={{flex:'1 1 260px',display:'flex',flexDirection:'column',gap:10}}>
-          {data.map((d,i)=>(
-            <Card key={d.name} className="card-hover" style={{padding:'10px 14px'}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
-                <span style={{fontSize:12.5,fontWeight:500,color:C.text}}>{d.name}</span>
-                <span style={{fontSize:11,color:C.textMuted}}>{d.current} → {d.target}</span>
-              </div>
-              <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                <span style={{fontSize:10,color:C.rose,width:28}}>Now</span>
-                <input type="range" min={0} max={10} value={d.current} onChange={e=>update(i,'current',e.target.value)}
-                  style={{flex:1,accentColor:C.rose}}/>
-                <span style={{fontSize:11,color:C.rose,width:16,textAlign:'right'}}>{d.current}</span>
-              </div>
-              <div style={{display:'flex',gap:8,alignItems:'center',marginTop:2}}>
-                <span style={{fontSize:10,color:C.accent,width:28}}>Goal</span>
-                <input type="range" min={0} max={10} value={d.target} onChange={e=>update(i,'target',e.target.value)}
-                  style={{flex:1,accentColor:C.accent}}/>
-                <span style={{fontSize:11,color:C.accent,width:16,textAlign:'right'}}>{d.target}</span>
-              </div>
-            </Card>
-          ))}
+      <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
+        {/* Left: pillar nav + mini chart */}
+        <div style={{width:200,flexShrink:0}}>
+          <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:16}}>
+            {data.map((d,i)=>{
+              const gap=d.target-d.current;
+              return (
+                <button key={d.name} onClick={()=>setActivePillar(i)} style={{
+                  display:'flex',alignItems:'center',gap:8,padding:'8px 12px',borderRadius:10,textAlign:'left',
+                  background:activePillar===i?`${C.pink}80`:'transparent',border:`0.5px solid ${activePillar===i?C.border:'transparent'}`,
+                  color:C.text,fontSize:12.5,cursor:'pointer',transition:'all 0.15s',
+                }}
+                onMouseEnter={e=>{if(activePillar!==i)e.currentTarget.style.background=`${C.pink}40`;}}
+                onMouseLeave={e=>{if(activePillar!==i)e.currentTarget.style.background='transparent';}}>
+                  <span style={{fontSize:15}}>{d.emoji}</span>
+                  <span style={{flex:1}}>{d.name}</span>
+                  <span style={{fontSize:10,color:gap>3?'#ea4335':gap>1?'#fbbc04':'#34a853',fontWeight:600}}>{d.current}/10</span>
+                </button>
+              );
+            })}
+          </div>
+          <Card style={{padding:10,display:'flex',justifyContent:'center'}}>
+            <svg width={180} height={180} viewBox="0 0 180 180">
+              {[2,4,6,8,10].map(v=>(<polygon key={v} points={data.map((_,i)=>pointAt(i,v).join(',')).join(' ')} fill="none" stroke={C.border} strokeWidth={0.3}/>))}
+              <polygon points={targetPath} fill={`${C.accent}15`} stroke={C.accent} strokeWidth={1} strokeDasharray="3 2"/>
+              <polygon points={currentPath} fill={`${C.rose}22`} stroke={C.rose} strokeWidth={1.5}/>
+              {data.map((d,i)=>{const[x,y]=pointAt(i,d.current); return <circle key={i} cx={x} cy={y} r={3} fill={activePillar===i?C.roseDark:C.rose} stroke={activePillar===i?'#fff':'none'} strokeWidth={1.5}/>;})}
+              {data.map((d,i)=>{const[x,y]=pointAt(i,11.5); return <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle" style={{fontSize:8,fill:activePillar===i?C.rose:C.textMuted}}>{d.emoji}</text>;})}
+            </svg>
+          </Card>
+        </div>
+
+        {/* Right: writing area */}
+        <div style={{flex:1,minWidth:300}}>
+          <Card style={{padding:'24px 28px',marginBottom:14}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
+              <span style={{fontSize:24}}>{p.emoji}</span>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:C.rose}}>{p.name}</div>
+            </div>
+            <div style={{fontSize:11.5,color:C.textMuted,marginBottom:16,fontStyle:'italic'}}>{p.prompt}</div>
+
+            <div style={{display:'flex',gap:12,marginBottom:18,alignItems:'center'}}>
+              <span style={{fontSize:11,color:C.textMuted}}>Where I am now:</span>
+              <input type="range" min={0} max={10} value={p.current} onChange={e=>update(activePillar,'current',parseInt(e.target.value))} style={{flex:1,accentColor:C.rose}}/>
+              <span style={{fontSize:13,fontWeight:600,color:C.rose,width:24,textAlign:'center'}}>{p.current}</span>
+              <span style={{fontSize:11,color:C.textMuted,marginLeft:8}}>Dream:</span>
+              <input type="range" min={0} max={10} value={p.target} onChange={e=>update(activePillar,'target',parseInt(e.target.value))} style={{width:80,accentColor:C.accent}}/>
+              <span style={{fontSize:13,fontWeight:600,color:C.accent,width:24,textAlign:'center'}}>{p.target}</span>
+            </div>
+
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,fontWeight:600,color:C.rose,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>Where I Am Now</div>
+              <textarea value={p.journalNow||''} onChange={e=>update(activePillar,'journalNow',e.target.value)}
+                placeholder="Be honest about your current reality. What's working? What's not? No judgment..."
+                style={{width:'100%',height:100,padding:'12px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:13,lineHeight:1.7,fontFamily:'inherit',resize:'vertical'}}/>
+            </div>
+
+            <div>
+              <div style={{fontSize:11,fontWeight:600,color:C.accent,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>My Dream Reality ✦</div>
+              <textarea value={p.journalDream||''} onChange={e=>update(activePillar,'journalDream',e.target.value)}
+                placeholder="Write as if it's already real. Present tense. Feel it as you write it..."
+                style={{width:'100%',height:120,padding:'12px 14px',borderRadius:10,border:`0.5px solid ${C.accent}40`,background:`${C.lavLight}80`,color:C.text,fontSize:13,lineHeight:1.7,fontFamily:'inherit',resize:'vertical',fontStyle:'italic'}}/>
+            </div>
+          </Card>
         </div>
       </div>
-      {history.length>0&&(
-        <div style={{marginTop:20}}>
-          <SectionHeading>Past Snapshots</SectionHeading>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-            {history.slice(-6).map((snap,i)=>(
-              <button key={i} onClick={()=>{ save(snap.data); toast('Loaded snapshot from '+snap.date,'info'); }}
-                style={{padding:'6px 14px',borderRadius:10,background:`${C.pink}40`,border:`0.5px solid ${C.border}`,color:C.text,fontSize:11,cursor:'pointer'}}>
-                📅 {snap.date}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 };
@@ -2483,6 +2487,178 @@ const NoteGraph = ({ pages, folders, activePid, onSelectPage }) => {
         <canvas ref={canvasRef} style={{width:'100%',height:'100%',display:'block'}}/>
         <div ref={tooltipRef} style={{position:'absolute',pointerEvents:'none',background:'#3a1828ee',color:'#fff',fontSize:11,padding:'4px 9px',borderRadius:7,opacity:0,transition:'opacity 0.1s',whiteSpace:'nowrap',zIndex:10}}/>
       </div>
+    </div>
+  );
+};
+
+/* ── Idea Bank (Masonry) ────────────────────────────────────────── */
+const IDEA_CATEGORIES = [
+  { key:'all', label:'All', color:C.rose },
+  { key:'business', label:'#business', color:'#34a853' },
+  { key:'content', label:'#content', color:'#4285f4' },
+  { key:'personal', label:'#personal', color:C.accent },
+  { key:'creative', label:'#creative', color:'#fbbc04' },
+  { key:'research', label:'#research', color:'#ea4335' },
+  { key:'someday', label:'#someday', color:C.textMuted },
+];
+const IDEA_TEMPLATES = [
+  { name:'Blank', content:'' },
+  { name:'Business Idea', content:'Problem:\n\nSolution:\n\nTarget audience:\n\nRevenue model:\n\nFirst step:' },
+  { name:'Content Idea', content:'Platform:\n\nHook:\n\nMain point:\n\nCTA:\n\nNotes:' },
+  { name:'Ad Copy', content:'Headline:\n\nBody:\n\nCTA:\n\nTarget audience:\n\nPlatform:' },
+  { name:'Product Idea', content:'Product:\n\nWhy people need it:\n\nPrice point:\n\nCompetitors:\n\nUnique angle:' },
+  { name:'Video Concept', content:'Title/Hook:\n\nFormat:\n\nKey points:\n- \n- \n- \n\nThumbnail idea:\n\nPlatform:' },
+];
+const IdeaBank = () => {
+  const IK='nylaos_ideas';
+  const [ideas, setIdeas] = useState(()=>JSON.parse(localStorage.getItem(IK)||'[]'));
+  const [filter, setFilter] = useState('all');
+  const [showAdd, setShowAdd] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newContent, setNewContent] = useState('');
+  const [newCat, setNewCat] = useState('personal');
+  const [expanded, setExpanded] = useState(null);
+  const [editId, setEditId] = useState(null);
+  const [editContent, setEditContent] = useState('');
+  const [searchQ, setSearchQ] = useState('');
+  const save = i => { setIdeas(i); localStorage.setItem(IK,JSON.stringify(i)); };
+  const add = () => {
+    if(!newTitle.trim()) return;
+    save([{id:Date.now(),title:newTitle.trim(),content:newContent,category:newCat,created:new Date().toISOString()},...ideas]);
+    setNewTitle(''); setNewContent(''); setShowAdd(false);
+    toast('Idea captured ✦','success',1500);
+  };
+  const remove = id => { save(ideas.filter(i=>i.id!==id)); if(expanded===id) setExpanded(null); };
+  const updateIdea = (id, field, val) => { save(ideas.map(i=>i.id===id?{...i,[field]:val}:i)); };
+  const startEdit = (idea) => { setEditId(idea.id); setEditContent(idea.content||''); };
+  const saveEdit = () => { if(editId) updateIdea(editId,'content',editContent); setEditId(null); };
+  const applyTemplate = (tpl) => { setNewContent(tpl.content); };
+
+  const filtered = ideas.filter(i=>{
+    if(filter!=='all'&&i.category!==filter) return false;
+    if(searchQ&&!i.title.toLowerCase().includes(searchQ.toLowerCase())&&!(i.content||'').toLowerCase().includes(searchQ.toLowerCase())) return false;
+    return true;
+  });
+
+  const catColor = (cat) => IDEA_CATEGORIES.find(c=>c.key===cat)?.color||C.textMuted;
+
+  return (
+    <div className="fade-in" style={{padding:0}}>
+      {/* Top bar */}
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap',padding:'0 4px'}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:C.rose,marginRight:8}}>Idea Bank</div>
+        <div style={{flex:1,minWidth:150}}>
+          <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search by text..."
+            style={{width:'100%',padding:'8px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>
+        </div>
+        <button onClick={()=>setShowAdd(true)} style={{padding:'8px 18px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer',fontWeight:500}}>+ New Idea</button>
+      </div>
+
+      {/* Category filters */}
+      <div style={{display:'flex',gap:6,marginBottom:18,flexWrap:'wrap',padding:'0 4px'}}>
+        {IDEA_CATEGORIES.map(cat=>(
+          <button key={cat.key} onClick={()=>setFilter(cat.key)} style={{
+            padding:'5px 14px',borderRadius:20,fontSize:12,cursor:'pointer',fontWeight:filter===cat.key?600:400,
+            background:filter===cat.key?cat.color:'transparent',
+            color:filter===cat.key?'#fff':cat.color,
+            border:`1px solid ${filter===cat.key?cat.color:cat.color+'50'}`,
+            transition:'all 0.15s',
+          }}>{cat.label}</button>
+        ))}
+      </div>
+
+      {/* Add new idea modal */}
+      {showAdd && (
+        <Card style={{marginBottom:18,padding:'18px 20px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.text}}>New Idea</div>
+            <button onClick={()=>setShowAdd(false)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:16}}>×</button>
+          </div>
+          <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="Idea title..."
+            style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:13.5,fontFamily:'inherit',marginBottom:8}}
+            onKeyDown={e=>e.key==='Enter'&&newTitle.trim()&&add()}/>
+          <textarea value={newContent} onChange={e=>setNewContent(e.target.value)} placeholder="Details, notes, links..."
+            style={{width:'100%',height:80,padding:'9px 12px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit',resize:'vertical',marginBottom:8}}/>
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+            <span style={{fontSize:11,color:C.textMuted}}>Category:</span>
+            {IDEA_CATEGORIES.filter(c=>c.key!=='all').map(cat=>(
+              <button key={cat.key} onClick={()=>setNewCat(cat.key)} style={{
+                padding:'3px 10px',borderRadius:8,fontSize:10.5,cursor:'pointer',
+                background:newCat===cat.key?cat.color+'20':'transparent',
+                border:`0.5px solid ${newCat===cat.key?cat.color:C.border}`,
+                color:cat.color,
+              }}>{cat.label}</button>
+            ))}
+            <div style={{flex:1}}/>
+            <span style={{fontSize:10.5,color:C.textMuted}}>Template:</span>
+            {IDEA_TEMPLATES.filter(t=>t.name!=='Blank').map(tpl=>(
+              <button key={tpl.name} onClick={()=>applyTemplate(tpl)} style={{padding:'3px 8px',borderRadius:6,fontSize:10,background:`${C.pink}40`,border:'none',color:C.rose,cursor:'pointer'}}>{tpl.name}</button>
+            ))}
+          </div>
+          <button onClick={add} style={{marginTop:12,padding:'9px 24px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer'}}>Save Idea</button>
+        </Card>
+      )}
+
+      {/* Masonry grid */}
+      <div style={{columnCount:3,columnGap:12,padding:'0 4px'}}>
+        {filtered.map(idea=>{
+          const isExp = expanded===idea.id;
+          const isEditing = editId===idea.id;
+          const ago = Math.floor((Date.now()-new Date(idea.created).getTime())/86400000);
+          const when = ago===0?'Today':ago===1?'Yesterday':ago+'d ago';
+          const timeStr = new Date(idea.created).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+          return (
+            <div key={idea.id} onClick={()=>!isEditing&&setExpanded(isExp?null:idea.id)}
+              className="card-hover" style={{
+                breakInside:'avoid',marginBottom:12,padding:'14px 16px',borderRadius:14,
+                background:C.card,border:`0.5px solid ${C.border}`,cursor:'pointer',
+                borderTop:`3px solid ${catColor(idea.category)}`,
+                transition:'all 0.2s',
+              }}>
+              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:6}}>
+                <div style={{fontSize:10,color:C.textMuted}}>{timeStr}</div>
+                <span style={{fontSize:9.5,padding:'2px 8px',borderRadius:6,background:catColor(idea.category)+'18',color:catColor(idea.category),fontWeight:600}}>
+                  {IDEA_CATEGORIES.find(c=>c.key===idea.category)?.label||idea.category}
+                </span>
+              </div>
+              <div style={{fontSize:13.5,fontWeight:500,color:C.text,marginBottom:idea.content?6:0,lineHeight:1.5}}>{idea.title}</div>
+              {idea.content&&(
+                <div style={{fontSize:12,color:C.textLight,lineHeight:1.6,whiteSpace:'pre-wrap',
+                  overflow:isExp?'visible':'hidden',maxHeight:isExp?'none':60,
+                }}>{idea.content}</div>
+              )}
+              {isExp&&(
+                <div style={{marginTop:10,display:'flex',gap:6,borderTop:`0.5px solid ${C.border}`,paddingTop:8}} onClick={e=>e.stopPropagation()}>
+                  {isEditing?(
+                    <div style={{width:'100%'}}>
+                      <textarea autoFocus value={editContent} onChange={e=>setEditContent(e.target.value)}
+                        style={{width:'100%',height:80,padding:'8px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit',resize:'vertical'}}/>
+                      <div style={{display:'flex',gap:6,marginTop:6}}>
+                        <button onClick={saveEdit} style={{padding:'5px 14px',borderRadius:8,background:C.rose,color:'#fff',border:'none',fontSize:11,cursor:'pointer'}}>Save</button>
+                        <button onClick={()=>setEditId(null)} style={{padding:'5px 14px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>Cancel</button>
+                      </div>
+                    </div>
+                  ):(<>
+                    <button onClick={()=>startEdit(idea)} style={{padding:'4px 12px',borderRadius:8,background:`${C.pink}50`,border:'none',color:C.rose,fontSize:11,cursor:'pointer'}}>Edit</button>
+                    <select value={idea.category} onChange={e=>updateIdea(idea.id,'category',e.target.value)}
+                      style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
+                      {IDEA_CATEGORIES.filter(c=>c.key!=='all').map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+                    </select>
+                    <div style={{flex:1}}/>
+                    <button onClick={()=>remove(idea.id)} style={{padding:'4px 12px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>Delete</button>
+                  </>)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {filtered.length===0&&(
+        <div style={{textAlign:'center',padding:'48px 20px',color:C.textMuted}}>
+          <div style={{fontSize:32,marginBottom:8}}>💡</div>
+          <div style={{fontSize:14,fontStyle:'italic'}}>No ideas yet. Your best idea is one click away.</div>
+        </div>
+      )}
     </div>
   );
 };
@@ -6203,6 +6379,7 @@ const MainContent = ({ navId, sub, onRestoreBiz }) => (
     {navId==='calendar'   && <CalendarPanel sub={sub} />}
     {navId==='tasks'      && <TasksPanel sub={sub} />}
     {navId==='period'     && <PeriodPanel sub={sub} />}
+    {navId==='ideas'      && <IdeaBank />}
     {navId==='notebook'   && <NotebookPanel sub={sub} />}
     {navId==='goals'      && <GoalsPanel sub={sub} />}
     {navId==='business'   && (sub==='Recently Deleted'?<TrashPanel type="business" onRestoreBusiness={onRestoreBiz}/>:<BusinessPanel sub={sub} />)}
@@ -6677,6 +6854,7 @@ const App = () => {
   };
 
   const isNotebook = activeNav === 'notebook';
+  const isFullWidth = activeNav === 'notebook' || activeNav === 'ideas';
   const mainPadding = isNotebook ? '0' : isMobile ? '16px 14px 20px' : '28px 32px';
 
   return (
@@ -6692,7 +6870,7 @@ const App = () => {
           <LeftSidebar activeNav={activeNav} onNavSelect={handleNavSelect}
             secCollapsed={secCollapsed} onToggleSec={()=>setSecCollapsed(c=>!c)} />
         )}
-        {!isMobile && !isNotebook && (
+        {!isMobile && !isFullWidth && (
           <SecondarySidebar navItem={navItem} activeSub={activeSub} onSubSelect={setActiveSub}
             onAdd={activeNav==='business'?addBiz:null}
             onDelete={activeNav==='business'?deleteBiz:null}
