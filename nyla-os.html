@@ -2788,6 +2788,24 @@ const IdeaBank = () => {
   const handleFiles = (files) => { [...files].filter(f=>f.type.startsWith('image/')).forEach(addPinFromFile); };
   const removePin = id => savePins(moodPins.filter(p=>p.id!==id));
   const updatePin = (id, note) => savePins(moodPins.map(p=>p.id===id?{...p,note}:p));
+  const [showMoodboard, setShowMoodboard] = useState(false);
+  const exportIdeaPDF = (idea) => {
+    const w=window.open('','_blank');
+    w.document.write('<!DOCTYPE html><html><head><title>'+idea.title+'</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:24px;color:#c4607a;}</style></head><body><h1>'+idea.title+'</h1><p style="font-size:11px;color:#aaa;">'+new Date(idea.created).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+'</p><hr style="border:none;border-top:1px solid #eee;margin:16px 0;"><div style="white-space:pre-wrap;line-height:2;">'+(idea.content||'(no content)')+'</div></body></html>');
+    w.document.close(); w.print();
+  };
+  const exportIdeaDrive = (idea) => {
+    const blob = new Blob([idea.title+'\n\n'+(idea.content||'')], {type:'text/plain'});
+    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=idea.title.replace(/[^a-zA-Z0-9 ]/g,'').trim()+'.txt'; a.click();
+    toast('Downloaded — upload to Google Drive','success',2000);
+  };
+  const sendToNotebook = (idea) => {
+    const NK='nylaos_notebook';
+    const existing = JSON.parse(localStorage.getItem(NK)||'[]');
+    const note = {id:Date.now(),title:idea.title,content:idea.content||'',folder:'Ideas',tags:[],created:new Date().toISOString(),updated:new Date().toISOString()};
+    localStorage.setItem(NK,JSON.stringify([note,...existing]));
+    toast('Sent to Notebook → Ideas','success',1800);
+  };
   const save = i => { setIdeas(i); localStorage.setItem(IK,JSON.stringify(i)); };
   const addCategory = () => {
     const name = newCatName.trim().toLowerCase().replace(/^#/,'');
@@ -2826,19 +2844,13 @@ const IdeaBank = () => {
       {/* Top bar */}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap',padding:'0 4px'}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:C.rose,marginRight:8}}>Idea Bank</div>
-        <div style={{display:'flex',gap:2,background:`${C.pink}40`,borderRadius:10,padding:2}}>
-          {[['ideas','💡 Ideas'],['moodboard','🎨 Moodboard']].map(([k,l])=>(
-            <button key={k} onClick={()=>setView(k)} style={{padding:'5px 14px',borderRadius:8,fontSize:11.5,fontWeight:view===k?600:400,cursor:'pointer',border:'none',background:view===k?C.card:'transparent',color:view===k?C.rose:C.textMuted,transition:'all 0.15s'}}>{l}</button>
-          ))}
-        </div>
         <div style={{flex:1,minWidth:150}}>
-          {view==='ideas'&&<input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search by text..."
-            style={{width:'100%',padding:'8px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>}
+          <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search by text..."
+            style={{width:'100%',padding:'8px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>
         </div>
-        {view==='ideas'&&<button onClick={()=>setShowAdd(true)} style={{padding:'8px 18px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer',fontWeight:500}}>+ New Idea</button>}
+        <button onClick={()=>setShowAdd(true)} style={{padding:'8px 18px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer',fontWeight:500}}>+ New Idea</button>
       </div>
 
-      {view==='ideas'&&<>
       {/* Category filters */}
       <div style={{display:'flex',gap:6,marginBottom:showAddCat?8:18,flexWrap:'wrap',padding:'0 4px',alignItems:'center'}}>
         {IDEA_CATEGORIES.map(cat=>(
@@ -2950,6 +2962,9 @@ const IdeaBank = () => {
                       style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
                       {IDEA_CATEGORIES.filter(c=>c.key!=='all').map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
                     </select>
+                    <button onClick={()=>exportIdeaPDF(idea)} title="Print / PDF" style={{padding:'4px 10px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:10.5,cursor:'pointer'}}>🖨</button>
+                    <button onClick={()=>exportIdeaDrive(idea)} title="Download for Google Drive" style={{padding:'4px 10px',borderRadius:8,background:'rgba(66,133,244,0.08)',border:'0.5px solid rgba(66,133,244,0.33)',color:'#4285f4',fontSize:10.5,cursor:'pointer'}}>📁</button>
+                    <button onClick={()=>sendToNotebook(idea)} title="Send to Notebook" style={{padding:'4px 10px',borderRadius:8,background:`${C.pink}50`,border:`0.5px solid ${C.border}`,color:C.accent,fontSize:10.5,cursor:'pointer'}}>📓</button>
                     <div style={{flex:1}}/>
                     <button onClick={()=>remove(idea.id)} style={{padding:'4px 12px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>Delete</button>
                   </>)}
@@ -2965,10 +2980,14 @@ const IdeaBank = () => {
           <div style={{fontSize:14,fontStyle:'italic'}}>No ideas yet. Your best idea is one click away.</div>
         </div>
       )}
-      </>}
-
       {/* ── Moodboard ── */}
-      {view==='moodboard'&&(
+      <div style={{padding:'0 4px',marginBottom:16}}>
+        <button onClick={()=>setShowMoodboard(!showMoodboard)} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px',borderRadius:10,background:`${C.pink}40`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:12.5,cursor:'pointer',fontWeight:500,width:'100%',justifyContent:'space-between'}}>
+          <span>🎨 Moodboard {moodPins.length>0?'('+moodPins.length+')':''}</span>
+          <span style={{fontSize:10,transition:'transform 0.2s',transform:showMoodboard?'rotate(180deg)':'rotate(0deg)'}}>▼</span>
+        </button>
+      </div>
+      {showMoodboard&&(
         <div style={{padding:'0 4px'}}>
           {/* Add area */}
           <div style={{display:'flex',gap:8,marginBottom:12,alignItems:'center',flexWrap:'wrap'}}>
