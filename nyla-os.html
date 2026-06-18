@@ -482,13 +482,13 @@ const TAG_COLORS = {
 
 /* ── Nav ────────────────────────────────────────────────────────── */
 const NAV = [
-  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes','Dream Life','Memory Jar','Life Score','Pros & Cons'] },
+  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes'] },
   { id:'calendar',   label:'Calendar',   sub:['Monthly','Daily','Weekly','Quarterly','Yearly','Event Planner'] },
-  { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Kanban','Eisenhower','Bucket List','Habits','Bored Bucket','Projects','Completed','Recently Deleted'] },
+  { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Kanban','Eisenhower','Bucket List','Habits','Bored Bucket','Pros & Cons','Projects','Completed','Recently Deleted'] },
   { id:'period',     label:'Period',     sub:['Cycle Overview','Phase Log','Symptoms','Learn'] },
   { id:'ideas',      label:'Ideas',      sub:[] },
   { id:'notebook',   label:'Notebook',   sub:[] },
-  { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Recently Deleted'] },
+  { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Dream Life','Recently Deleted'] },
   { id:'business',   label:'Business',   sub:['Lunar Love','Halo House Collective Co.','Love Sativa','Dropshipping'] },
   { id:'cosmic',     label:'Cosmic',     sub:['Moon Phase','Numerology','Astrology','Matrix of Destiny'] },
   { id:'university', label:'University', sub:['Courses','Assignments','GPA Calculator','Resources'] },
@@ -1151,6 +1151,8 @@ const DayPanel = ({ dateKey, label }) => {
   const [editTime, setEditTime] = useState('');
   const [newText, setNewText] = useState('');
   const [newTime, setNewTime] = useState('');
+  const [recurEnd, setRecurEnd] = useState('');
+  const [showRecur, setShowRecur] = useState(false);
 
   // One-time migration: move old nylaos_day_items into nylaos_tasks
   useEffect(()=>{
@@ -1191,8 +1193,21 @@ const DayPanel = ({ dateKey, label }) => {
 
   const addItem = () => {
     if(!newText.trim()) return;
-    saveTasks([...allTasks,{id:Date.now(),text:newText.trim(),done:false,calendarDate:dateKey,time:newTime||null,source:'calendar',created:new Date().toISOString()}]);
-    setNewText(''); setNewTime('');
+    if(showRecur && recurEnd) {
+      const start = new Date(dateKey + 'T00:00:00');
+      const end = new Date(recurEnd + 'T00:00:00');
+      if(end < start) { toast('End date must be after start date','error'); return; }
+      const newItems = [];
+      for(let d = new Date(start); d <= end; d.setDate(d.getDate()+1)) {
+        const dk = d.toISOString().slice(0,10);
+        newItems.push({id:Date.now()+newItems.length,text:newText.trim(),done:false,calendarDate:dk,time:newTime||null,source:'calendar',recurGroup:start.toISOString().slice(0,10)+'_'+recurEnd,created:new Date().toISOString()});
+      }
+      saveTasks([...allTasks,...newItems]);
+      toast(`Added to ${newItems.length} days`,'success',1500);
+    } else {
+      saveTasks([...allTasks,{id:Date.now(),text:newText.trim(),done:false,calendarDate:dateKey,time:newTime||null,source:'calendar',created:new Date().toISOString()}]);
+    }
+    setNewText(''); setNewTime(''); setRecurEnd(''); setShowRecur(false);
   };
   const toggleDone = id => {
     const nowDone = !allTasks.find(t=>t.id===id)?.done;
@@ -1256,13 +1271,25 @@ const DayPanel = ({ dateKey, label }) => {
           <div style={{ fontSize:12.5, color:C.textMuted, fontStyle:'italic', padding:'2px 0 4px' }}>No events — add one below.</div>
         )}
       </div>
-      <div style={{ display:'flex', gap:6, paddingBottom:14, borderBottom:`0.5px solid ${C.border}` }}>
-        <input value={newText} onChange={e=>setNewText(e.target.value)}
-          onKeyDown={e=>e.key==='Enter'&&addItem()} placeholder="Add event or note..."
-          style={{ flex:1, padding:'8px 11px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13, fontFamily:'inherit' }}/>
-        <input type="time" value={newTime} onChange={e=>setNewTime(e.target.value)}
-          style={{ width:90, padding:'8px 7px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12 }}/>
-        <button onClick={addItem} style={{ padding:'8px 20px', borderRadius:9, background:C.rose, color:'#fff', border:'none', fontSize:18, cursor:'pointer', lineHeight:1 }}>+</button>
+      <div style={{ display:'flex', flexDirection:'column', gap:6, paddingBottom:14, borderBottom:`0.5px solid ${C.border}` }}>
+        <div style={{ display:'flex', gap:6 }}>
+          <input value={newText} onChange={e=>setNewText(e.target.value)}
+            onKeyDown={e=>e.key==='Enter'&&addItem()} placeholder="Add event or note..."
+            style={{ flex:1, padding:'8px 11px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:13, fontFamily:'inherit' }}/>
+          <input type="time" value={newTime} onChange={e=>setNewTime(e.target.value)}
+            style={{ width:90, padding:'8px 7px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12 }}/>
+          <button onClick={addItem} style={{ padding:'8px 20px', borderRadius:9, background:C.rose, color:'#fff', border:'none', fontSize:18, cursor:'pointer', lineHeight:1 }}>+</button>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <button onClick={()=>setShowRecur(!showRecur)} style={{ fontSize:11, padding:'3px 10px', borderRadius:10, border:`0.5px solid ${C.border}`, background:showRecur?`${C.accent}20`:'transparent', color:showRecur?C.accent:C.textMuted, cursor:'pointer' }}>🔁 Recurring</button>
+          {showRecur && (
+            <>
+              <span style={{ fontSize:11, color:C.textMuted }}>{label.split(',')[0]} through</span>
+              <input type="date" value={recurEnd} onChange={e=>setRecurEnd(e.target.value)} min={dateKey}
+                style={{ padding:'3px 8px', borderRadius:7, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:11 }}/>
+            </>
+          )}
+        </div>
       </div>
 
       {/* ── Tasks section ── */}
@@ -1644,73 +1671,6 @@ const HabitTracker = () => {
   );
 };
 
-/* ── Memory Jar ────────────────────────────────────────────────── */
-const MemoryJar = () => {
-  const MK='nylaos_memory_jar';
-  const [memories, setMemories] = useState(()=>JSON.parse(localStorage.getItem(MK)||'[]'));
-  const [input, setInput] = useState('');
-  const [shaking, setShaking] = useState(false);
-  const [randomMem, setRandomMem] = useState(null);
-  const save = m => { setMemories(m); localStorage.setItem(MK,JSON.stringify(m)); };
-  const add = () => { if(!input.trim()) return; save([{id:Date.now(),text:input.trim(),date:new Date().toISOString(),color:`hsl(${Math.random()*60+320},70%,88%)`},...memories]); setInput(''); toast('Memory saved ✦','success',1500); };
-  const shake = () => {
-    if(memories.length===0) return;
-    setShaking(true); setRandomMem(null);
-    let count=0;
-    const interval=setInterval(()=>{
-      setRandomMem(memories[Math.floor(Math.random()*memories.length)]);
-      count++;
-      if(count>12){ clearInterval(interval); setShaking(false); }
-    },120);
-  };
-  const remove = id => save(memories.filter(m=>m.id!==id));
-  return (
-    <div className="fade-in" style={{maxWidth:560,textAlign:'center'}}>
-      <PageTitle>Memory Jar</PageTitle>
-      <div style={{fontSize:13,color:C.textMuted,marginBottom:20,fontStyle:'italic'}}>Drop in good moments. Shake on bad days.</div>
-
-      {/* Jar visualization */}
-      <div style={{position:'relative',width:180,height:220,margin:'0 auto 24px',cursor:'pointer'}} onClick={shake}>
-        <div style={{position:'absolute',bottom:0,left:10,right:10,height:Math.min(200,memories.length*12+20),borderRadius:'0 0 30px 30px',background:`linear-gradient(180deg,${C.pink}40,${C.lavender}60)`,border:`2px solid ${C.border}`,borderTop:'none',transition:'height 0.5s ease',overflow:'hidden'}}>
-          {memories.slice(0,15).map((m,i)=>(
-            <div key={m.id} style={{position:'absolute',bottom:4+i*12,left:8+Math.sin(i*2.3)*20,width:16+Math.random()*30,height:8,borderRadius:4,background:m.color||C.rose,opacity:0.7,transform:shaking?`rotate(${Math.random()*40-20}deg)`:'none',transition:'transform 0.1s'}}/>
-          ))}
-        </div>
-        <div style={{position:'absolute',top:0,left:0,right:0,height:30,borderRadius:'10px 10px 0 0',background:`${C.pink}30`,border:`2px solid ${C.border}`,borderBottom:'none'}}/>
-        <div style={{position:'absolute',top:-8,left:'50%',transform:'translateX(-50%)',width:60,height:16,borderRadius:8,background:C.rose,border:`2px solid ${C.roseDark}`}}/>
-      </div>
-      <div style={{fontSize:11,color:C.textMuted,marginBottom:20}}>
-        {memories.length} {memories.length===1?'memory':'memories'} · tap jar to shake
-      </div>
-
-      {/* Random memory display */}
-      {randomMem&&!shaking&&(
-        <Card style={{marginBottom:20,background:`linear-gradient(135deg,${C.lavender}60,${C.pink}40)`,border:`1.5px solid ${C.accent}40`,padding:'24px 28px'}}>
-          <div style={{fontSize:15,color:C.text,lineHeight:1.7,fontStyle:'italic',fontFamily:"'DM Serif Display',serif"}}>"{randomMem.text}"</div>
-          <div style={{fontSize:11,color:C.textMuted,marginTop:10}}>{new Date(randomMem.date).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
-        </Card>
-      )}
-
-      {/* Add memory */}
-      <div style={{display:'flex',gap:8,marginBottom:24}}>
-        <InlineInput value={input} onChange={e=>setInput(e.target.value)} placeholder="Something good that happened..." onKeyDown={e=>e.key==='Enter'&&add()} style={{flex:1}}/>
-        <button onClick={add} style={{padding:'9px 20px',borderRadius:12,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer'}}>Drop in jar</button>
-      </div>
-
-      {/* Memory list */}
-      <div style={{display:'flex',flexDirection:'column',gap:6,textAlign:'left'}}>
-        {memories.slice(0,20).map(m=>(
-          <div key={m.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',borderRadius:10,background:`${m.color||C.pink}40`,border:`0.5px solid ${C.border}`}}>
-            <span style={{width:8,height:8,borderRadius:'50%',background:C.rose,flexShrink:0}}/>
-            <span style={{flex:1,fontSize:12.5,color:C.text}}>{m.text}</span>
-            <span style={{fontSize:10,color:C.textMuted,flexShrink:0}}>{new Date(m.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
-            <button onClick={()=>remove(m.id)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:13,opacity:0.5}}>×</button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
 
 /* ── Bucket List ───────────────────────────────────────────────── */
 const BUCKET_LEVELS = [
@@ -1957,70 +1917,6 @@ const ProsConsMaker = () => {
   );
 };
 
-/* ── Life Scoreboard ───────────────────────────────────────────── */
-const LifeScoreboard = () => {
-  const [scores, setScores] = useState(()=>JSON.parse(localStorage.getItem('nylaos_life_scores')||'{}'));
-  const save = s => { setScores(s); localStorage.setItem('nylaos_life_scores',JSON.stringify(s)); };
-  const update = (key, val) => save({...scores,[key]:val});
-
-  const tasks=JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
-  const goals=JSON.parse(localStorage.getItem('nylaos_goals')||'[]');
-  const habits=JSON.parse(localStorage.getItem('nylaos_habits')||'[]');
-  const habitLog=JSON.parse(localStorage.getItem('nylaos_habit_log')||'{}');
-  const memories=JSON.parse(localStorage.getItem('nylaos_memory_jar')||'[]');
-  const ideas=JSON.parse(localStorage.getItem('nylaos_ideas')||'[]');
-  const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
-
-  const tasksCompleted=tasks.filter(t=>t.done).length;
-  const goalsCompleted=goals.filter(g=>g.progress>=100).length;
-  const todayKey=toDateKey();
-  const habitsDoneToday=habits.filter(h=>habitLog[h.id+'_'+todayKey]).length;
-  const currentStreak=(()=>{let s=0;for(let i=0;i<365;i++){const d=new Date();d.setDate(d.getDate()-i);const dk=toDateKey(d);const any=habits.some(h=>habitLog[h.id+'_'+dk]);if(any)s++;else break;}return s;})();
-
-  const METRICS = [
-    {label:'Tasks Completed',value:tasksCompleted,icon:'✓',color:C.rose,auto:true},
-    {label:'Goals Hit',value:goalsCompleted,icon:'🎯',color:C.accent,auto:true},
-    {label:'Habit Streak',value:currentStreak+'d',icon:'🔥',color:'#ea4335',auto:true},
-    {label:'Habits Today',value:habitsDoneToday+'/'+habits.length,icon:'💪',color:'#34a853',auto:true},
-    {label:'Notes Written',value:pages.length,icon:'📝',color:'#4285f4',auto:true},
-    {label:'Ideas Captured',value:ideas.length,icon:'💡',color:'#fbbc04',auto:true},
-    {label:'Memories Saved',value:memories.length,icon:'✨',color:C.rose,auto:true},
-    {label:'GPA',value:scores.gpa||'—',icon:'🎓',color:'#9080d8',editable:true,key:'gpa'},
-    {label:'Savings',value:scores.savings?'$'+scores.savings:'—',icon:'💰',color:'#34a853',editable:true,key:'savings'},
-    {label:'Books Read',value:scores.books||'0',icon:'📚',color:'#c4784a',editable:true,key:'books'},
-    {label:'Revenue This Mo',value:scores.revenue?'$'+scores.revenue:'—',icon:'📈',color:C.rose,editable:true,key:'revenue'},
-    {label:'Days Since Reset',value:scores.resetDate?Math.floor((Date.now()-new Date(scores.resetDate).getTime())/86400000):'—',icon:'🔄',color:C.accent,editable:true,key:'resetDate',isDate:true},
-  ];
-  const [editing, setEditing] = useState(null);
-  const [editVal, setEditVal] = useState('');
-
-  return (
-    <div className="fade-in" style={{maxWidth:680}}>
-      <PageTitle>Life Scoreboard</PageTitle>
-      <div style={{fontSize:13,color:C.textMuted,marginBottom:20,fontStyle:'italic'}}>Your life, quantified. Auto-tracked + custom metrics.</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180,1fr))',gap:12}}>
-        {METRICS.map((m,i)=>(
-          <Card key={i} className="card-hover" style={{padding:'16px 18px',textAlign:'center'}}
-            onClick={()=>{if(m.editable){setEditing(m.key);setEditVal(m.isDate?scores[m.key]||'':scores[m.key]||'');}}}>
-            <div style={{fontSize:24,marginBottom:4}}>{m.icon}</div>
-            {editing===m.key?(
-              <div onClick={e=>e.stopPropagation()}>
-                <input autoFocus type={m.isDate?'date':'text'} value={editVal} onChange={e=>setEditVal(e.target.value)}
-                  onKeyDown={e=>{if(e.key==='Enter'){update(m.key,editVal);setEditing(null);toast('Updated','success',1200);}if(e.key==='Escape')setEditing(null);}}
-                  onBlur={()=>{update(m.key,editVal);setEditing(null);}}
-                  style={{width:'100%',padding:'4px 8px',borderRadius:6,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.rose,fontSize:14,textAlign:'center',fontFamily:'inherit'}}/>
-              </div>
-            ):(
-              <div style={{fontSize:22,fontFamily:"'DM Serif Display',serif",color:m.color,marginBottom:4}}>{m.value}</div>
-            )}
-            <div style={{fontSize:11,color:C.textMuted}}>{m.label}</div>
-            {m.editable&&!editing&&<div style={{fontSize:9,color:C.textMuted,marginTop:2}}>tap to edit</div>}
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-};
 
 /* ── Section Renamer (Name Everything) ─────────────────────────── */
 const _getCustomNames = () => JSON.parse(localStorage.getItem('nylaos_custom_names')||'{}');
@@ -2227,42 +2123,35 @@ const VoiceNotes = () => {
 const DreamLifeBlueprint = () => {
   const BK='nylaos_blueprint';
   const PILLARS=[
-    {name:'Wealth',emoji:'💰',prompt:'What does financial freedom look like? Income, savings, investments, lifestyle...'},
-    {name:'Health',emoji:'🌿',prompt:'How does your healthiest self look and feel? Body, energy, nutrition, movement...'},
-    {name:'Relationships',emoji:'💕',prompt:'Describe your ideal relationships — romantic, family, friendships, community...'},
-    {name:'Career',emoji:'🚀',prompt:'What does your dream career/business empire look like? Impact, income, freedom...'},
-    {name:'Spirituality',emoji:'✨',prompt:'How do you connect with yourself and the universe? Rituals, beliefs, inner peace...'},
-    {name:'Lifestyle',emoji:'🏡',prompt:'Paint your dream daily life — where you live, what you wear, how you spend your time...'},
-    {name:'Education',emoji:'📚',prompt:'What are you learning and mastering? Skills, knowledge, personal growth...'},
-    {name:'Creativity',emoji:'🎨',prompt:'How does creativity flow through your life? Art, expression, innovation...'},
+    {name:'Wealth',emoji:'💰',prompt:'Script your financial freedom — income, savings, investments, the lifestyle it funds...'},
+    {name:'Health',emoji:'🌿',prompt:'Script your healthiest self — body, energy, nutrition, movement, how you feel every day...'},
+    {name:'Relationships',emoji:'💕',prompt:'Script your ideal relationships — romantic, family, friendships, community...'},
+    {name:'Career',emoji:'🚀',prompt:'Script your dream career or business empire — impact, income, freedom, legacy...'},
+    {name:'Spirituality',emoji:'✨',prompt:'Script your spiritual life — rituals, beliefs, inner peace, connection to self & universe...'},
+    {name:'Lifestyle',emoji:'🏡',prompt:'Script your dream daily life — where you live, what you wear, how you spend your time...'},
+    {name:'Education',emoji:'📚',prompt:'Script what you\'re learning and mastering — skills, knowledge, personal growth...'},
+    {name:'Creativity',emoji:'🎨',prompt:'Script how creativity flows through your life — art, expression, innovation...'},
   ];
   const [data, setData] = useState(()=>{
     const saved=JSON.parse(localStorage.getItem(BK)||'null');
-    return saved||PILLARS.map(p=>({name:p.name,emoji:p.emoji,prompt:p.prompt,current:5,target:10,journalNow:'',journalDream:''}));
+    return saved||PILLARS.map(p=>({name:p.name,emoji:p.emoji,prompt:p.prompt,script:''}));
   });
   const [activePillar, setActivePillar] = useState(0);
   const save = d => { setData(d); localStorage.setItem(BK,JSON.stringify(d)); };
   const update = (i, field, val) => { const d=[...data]; d[i]={...d[i],[field]:val}; save(d); };
   const p = data[activePillar];
 
-  // Mini radar chart
-  const cx=90, cy=90, R=70, n=data.length;
-  const angleOf = i => (Math.PI*2*i/n) - Math.PI/2;
-  const pointAt = (i, v) => { const a=angleOf(i), r=R*v/10; return [cx+r*Math.cos(a), cy+r*Math.sin(a)]; };
-  const currentPath = data.map((d,i)=>pointAt(i,d.current).join(',')).join(' ');
-  const targetPath = data.map((d,i)=>pointAt(i,d.target).join(',')).join(' ');
-
   return (
     <div className="fade-in" style={{maxWidth:760}}>
       <PageTitle>Dream Life Blueprint</PageTitle>
-      <div style={{fontSize:13,color:C.textMuted,marginBottom:20,fontStyle:'italic'}}>Define your dream life across every pillar. Write in present tense — as if it's already real.</div>
+      <div style={{fontSize:13,color:C.textMuted,marginBottom:20,fontStyle:'italic'}}>Script your future into existence. Write in present tense — as if it's already real.</div>
 
       <div style={{display:'flex',gap:20,flexWrap:'wrap'}}>
-        {/* Left: pillar nav + mini chart */}
+        {/* Left: pillar nav */}
         <div style={{width:200,flexShrink:0}}>
-          <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:16}}>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>
             {data.map((d,i)=>{
-              const gap=d.target-d.current;
+              const hasContent = (d.script||d.journalDream||'').trim().length > 0;
               return (
                 <button key={d.name} onClick={()=>setActivePillar(i)} style={{
                   display:'flex',alignItems:'center',gap:8,padding:'8px 12px',borderRadius:10,textAlign:'left',
@@ -2273,53 +2162,25 @@ const DreamLifeBlueprint = () => {
                 onMouseLeave={e=>{if(activePillar!==i)e.currentTarget.style.background='transparent';}}>
                   <span style={{fontSize:15}}>{d.emoji}</span>
                   <span style={{flex:1}}>{d.name}</span>
-                  <span style={{fontSize:10,color:gap>3?'#ea4335':gap>1?'#fbbc04':'#34a853',fontWeight:600}}>{d.current}/10</span>
+                  {hasContent && <span style={{fontSize:8,color:C.rose}}>●</span>}
                 </button>
               );
             })}
           </div>
-          <Card style={{padding:10,display:'flex',justifyContent:'center'}}>
-            <svg width={180} height={180} viewBox="0 0 180 180">
-              {[2,4,6,8,10].map(v=>(<polygon key={v} points={data.map((_,i)=>pointAt(i,v).join(',')).join(' ')} fill="none" stroke={C.border} strokeWidth={0.3}/>))}
-              <polygon points={targetPath} fill={`${C.accent}15`} stroke={C.accent} strokeWidth={1} strokeDasharray="3 2"/>
-              <polygon points={currentPath} fill={`${C.rose}22`} stroke={C.rose} strokeWidth={1.5}/>
-              {data.map((d,i)=>{const[x,y]=pointAt(i,d.current); return <circle key={i} cx={x} cy={y} r={3} fill={activePillar===i?C.roseDark:C.rose} stroke={activePillar===i?'#fff':'none'} strokeWidth={1.5}/>;})}
-              {data.map((d,i)=>{const[x,y]=pointAt(i,11.5); return <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle" style={{fontSize:8,fill:activePillar===i?C.rose:C.textMuted}}>{d.emoji}</text>;})}
-            </svg>
-          </Card>
         </div>
 
-        {/* Right: writing area */}
+        {/* Right: scripting area */}
         <div style={{flex:1,minWidth:300}}>
-          <Card style={{padding:'24px 28px',marginBottom:14}}>
+          <Card style={{padding:'24px 28px'}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
               <span style={{fontSize:24}}>{p.emoji}</span>
               <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:C.rose}}>{p.name}</div>
             </div>
             <div style={{fontSize:11.5,color:C.textMuted,marginBottom:16,fontStyle:'italic'}}>{p.prompt}</div>
 
-            <div style={{display:'flex',gap:12,marginBottom:18,alignItems:'center'}}>
-              <span style={{fontSize:11,color:C.textMuted}}>Where I am now:</span>
-              <input type="range" min={0} max={10} value={p.current} onChange={e=>update(activePillar,'current',parseInt(e.target.value))} style={{flex:1,accentColor:C.rose}}/>
-              <span style={{fontSize:13,fontWeight:600,color:C.rose,width:24,textAlign:'center'}}>{p.current}</span>
-              <span style={{fontSize:11,color:C.textMuted,marginLeft:8}}>Dream:</span>
-              <input type="range" min={0} max={10} value={p.target} onChange={e=>update(activePillar,'target',parseInt(e.target.value))} style={{width:80,accentColor:C.accent}}/>
-              <span style={{fontSize:13,fontWeight:600,color:C.accent,width:24,textAlign:'center'}}>{p.target}</span>
-            </div>
-
-            <div style={{marginBottom:16}}>
-              <div style={{fontSize:11,fontWeight:600,color:C.rose,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>Where I Am Now</div>
-              <textarea value={p.journalNow||''} onChange={e=>update(activePillar,'journalNow',e.target.value)}
-                placeholder="Be honest about your current reality. What's working? What's not? No judgment..."
-                style={{width:'100%',height:100,padding:'12px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:13,lineHeight:1.7,fontFamily:'inherit',resize:'vertical'}}/>
-            </div>
-
-            <div>
-              <div style={{fontSize:11,fontWeight:600,color:C.accent,textTransform:'uppercase',letterSpacing:0.5,marginBottom:6}}>My Dream Reality ✦</div>
-              <textarea value={p.journalDream||''} onChange={e=>update(activePillar,'journalDream',e.target.value)}
-                placeholder="Write as if it's already real. Present tense. Feel it as you write it..."
-                style={{width:'100%',height:120,padding:'12px 14px',borderRadius:10,border:`0.5px solid ${C.accent}40`,background:`${C.lavLight}80`,color:C.text,fontSize:13,lineHeight:1.7,fontFamily:'inherit',resize:'vertical',fontStyle:'italic'}}/>
-            </div>
+            <textarea value={p.script||p.journalDream||''} onChange={e=>update(activePillar,'script',e.target.value)}
+              placeholder="Write as if it's already real. Present tense. Feel it as you write it...&#10;&#10;I wake up every morning in...&#10;My days look like...&#10;I am so grateful for..."
+              style={{width:'100%',height:280,padding:'16px 18px',borderRadius:12,border:`0.5px solid ${C.accent}40`,background:`${C.lavLight}80`,color:C.text,fontSize:13.5,lineHeight:1.8,fontFamily:'inherit',resize:'vertical',fontStyle:'italic'}}/>
           </Card>
         </div>
       </div>
@@ -6803,13 +6664,13 @@ const SettingsPanel = ({ sub }) => {
 /* ── Router ─────────────────────────────────────────────────────── */
 const MainContent = ({ navId, sub, onRestoreBiz }) => (
   <div key={`${navId}__${sub}`} className="fade-in">
-    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Dream Life'?<DreamLifeBlueprint/>:sub==='Memory Jar'?<MemoryJar/>:sub==='Life Score'?<LifeScoreboard/>:sub==='Pros & Cons'?<ProsConsMaker/>:<FocusMode/>)}
+    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:<FocusMode/>)}
     {navId==='calendar'   && (sub==='Event Planner'?<EventPlanner/>:<CalendarPanel sub={sub} />)}
-    {navId==='tasks'      && <TasksPanel sub={sub} />}
+    {navId==='tasks'      && (sub==='Pros & Cons'?<ProsConsMaker/>:<TasksPanel sub={sub} />)}
     {navId==='period'     && <PeriodPanel sub={sub} />}
     {navId==='ideas'      && <IdeaBank />}
     {navId==='notebook'   && <NotebookPanel sub={sub} />}
-    {navId==='goals'      && <GoalsPanel sub={sub} />}
+    {navId==='goals'      && (sub==='Dream Life'?<DreamLifeBlueprint/>:<GoalsPanel sub={sub} />)}
     {navId==='business'   && (sub==='Recently Deleted'?<TrashPanel type="business" onRestoreBusiness={onRestoreBiz}/>:<BusinessPanel sub={sub} />)}
     {navId==='cosmic'     && <CosmicPanel sub={sub} />}
     {navId==='university' && <UniversityPanel sub={sub} />}
