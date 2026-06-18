@@ -2775,6 +2775,19 @@ const IdeaBank = () => {
   const [showAddCat, setShowAddCat] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [newCatColor, setNewCatColor] = useState(CAT_COLORS[0]);
+  const [view, setView] = useState('ideas');
+  const MBK='nylaos_moodboard';
+  const [moodPins, setMoodPins] = useState(()=>JSON.parse(localStorage.getItem(MBK)||'[]'));
+  const savePins = p => { setMoodPins(p); localStorage.setItem(MBK,JSON.stringify(p)); };
+  const [moodUrl, setMoodUrl] = useState('');
+  const fileRef = useRef(null);
+  const dropRef = useRef(null);
+  const [dragging, setDragging] = useState(false);
+  const addPinFromUrl = () => { if(!moodUrl.trim()) return; savePins([{id:Date.now(),src:moodUrl.trim(),note:'',created:new Date().toISOString()},...moodPins]); setMoodUrl(''); toast('Pinned ✦','success',1200); };
+  const addPinFromFile = (file) => { const r=new FileReader(); r.onload=e=>{ savePins([{id:Date.now(),src:e.target.result,note:'',created:new Date().toISOString()},...moodPins]); toast('Pinned ✦','success',1200); }; r.readAsDataURL(file); };
+  const handleFiles = (files) => { [...files].filter(f=>f.type.startsWith('image/')).forEach(addPinFromFile); };
+  const removePin = id => savePins(moodPins.filter(p=>p.id!==id));
+  const updatePin = (id, note) => savePins(moodPins.map(p=>p.id===id?{...p,note}:p));
   const save = i => { setIdeas(i); localStorage.setItem(IK,JSON.stringify(i)); };
   const addCategory = () => {
     const name = newCatName.trim().toLowerCase().replace(/^#/,'');
@@ -2813,13 +2826,19 @@ const IdeaBank = () => {
       {/* Top bar */}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap',padding:'0 4px'}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:C.rose,marginRight:8}}>Idea Bank</div>
-        <div style={{flex:1,minWidth:150}}>
-          <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search by text..."
-            style={{width:'100%',padding:'8px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>
+        <div style={{display:'flex',gap:2,background:`${C.pink}40`,borderRadius:10,padding:2}}>
+          {[['ideas','💡 Ideas'],['moodboard','🎨 Moodboard']].map(([k,l])=>(
+            <button key={k} onClick={()=>setView(k)} style={{padding:'5px 14px',borderRadius:8,fontSize:11.5,fontWeight:view===k?600:400,cursor:'pointer',border:'none',background:view===k?C.card:'transparent',color:view===k?C.rose:C.textMuted,transition:'all 0.15s'}}>{l}</button>
+          ))}
         </div>
-        <button onClick={()=>setShowAdd(true)} style={{padding:'8px 18px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer',fontWeight:500}}>+ New Idea</button>
+        <div style={{flex:1,minWidth:150}}>
+          {view==='ideas'&&<input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search by text..."
+            style={{width:'100%',padding:'8px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>}
+        </div>
+        {view==='ideas'&&<button onClick={()=>setShowAdd(true)} style={{padding:'8px 18px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer',fontWeight:500}}>+ New Idea</button>}
       </div>
 
+      {view==='ideas'&&<>
       {/* Category filters */}
       <div style={{display:'flex',gap:6,marginBottom:showAddCat?8:18,flexWrap:'wrap',padding:'0 4px',alignItems:'center'}}>
         {IDEA_CATEGORIES.map(cat=>(
@@ -2944,6 +2963,60 @@ const IdeaBank = () => {
         <div style={{textAlign:'center',padding:'48px 20px',color:C.textMuted}}>
           <div style={{fontSize:32,marginBottom:8}}>💡</div>
           <div style={{fontSize:14,fontStyle:'italic'}}>No ideas yet. Your best idea is one click away.</div>
+        </div>
+      )}
+      </>}
+
+      {/* ── Moodboard ── */}
+      {view==='moodboard'&&(
+        <div style={{padding:'0 4px'}}>
+          {/* Add area */}
+          <div style={{display:'flex',gap:8,marginBottom:12,alignItems:'center',flexWrap:'wrap'}}>
+            <input value={moodUrl} onChange={e=>setMoodUrl(e.target.value)} placeholder="Paste image URL..."
+              onKeyDown={e=>e.key==='Enter'&&addPinFromUrl()}
+              style={{flex:1,minWidth:200,padding:'9px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>
+            <button onClick={addPinFromUrl} style={{padding:'9px 18px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:12.5,cursor:'pointer'}}>+ Pin</button>
+            <button onClick={()=>fileRef.current?.click()} style={{padding:'9px 16px',borderRadius:10,background:`${C.pink}80`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:12.5,cursor:'pointer'}}>📁 Upload</button>
+            <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e=>handleFiles(e.target.files)}/>
+          </div>
+
+          {/* Drop zone */}
+          <div ref={dropRef}
+            onDragOver={e=>{e.preventDefault();setDragging(true);}}
+            onDragLeave={()=>setDragging(false)}
+            onDrop={e=>{e.preventDefault();setDragging(false);handleFiles(e.dataTransfer.files);}}
+            style={{
+              minHeight:moodPins.length?'auto':200,
+              border:dragging?`2px dashed ${C.rose}`:`2px dashed transparent`,
+              borderRadius:16,background:dragging?`${C.rose}08`:'transparent',
+              transition:'all 0.2s',padding:dragging&&!moodPins.length?20:0,
+            }}>
+            {moodPins.length===0&&(
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:200,color:C.textMuted,gap:8}}>
+                <div style={{fontSize:36}}>🎨</div>
+                <div style={{fontSize:14,fontStyle:'italic'}}>Drag & drop images, paste a URL, or upload</div>
+                <div style={{fontSize:11}}>Build your vision board</div>
+              </div>
+            )}
+
+            {/* Masonry pins */}
+            <div style={{columnCount:3,columnGap:12}}>
+              {moodPins.map(pin=>(
+                <div key={pin.id} style={{breakInside:'avoid',marginBottom:12,borderRadius:14,overflow:'hidden',background:C.card,border:`0.5px solid ${C.border}`,position:'relative',transition:'all 0.2s'}}
+                  className="card-hover">
+                  <img src={pin.src} alt="" style={{width:'100%',display:'block',borderRadius:'14px 14px 0 0'}}
+                    onError={e=>{e.target.style.display='none';}}/>
+                  <div style={{padding:'8px 12px',display:'flex',alignItems:'center',gap:6}}>
+                    <input value={pin.note||''} onChange={e=>updatePin(pin.id,e.target.value)} placeholder="Add a note..."
+                      onClick={e=>e.stopPropagation()}
+                      style={{flex:1,background:'transparent',border:'none',color:C.text,fontSize:11.5,fontFamily:'inherit',outline:'none'}}/>
+                    <button onClick={()=>removePin(pin.id)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:13,opacity:0.4,flexShrink:0}}
+                      onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.4}>×</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
