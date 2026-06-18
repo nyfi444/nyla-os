@@ -2739,8 +2739,7 @@ const NoteGraph = ({ pages, folders, activePid, onSelectPage }) => {
 };
 
 /* ── Idea Bank (Masonry) ────────────────────────────────────────── */
-const IDEA_CATEGORIES = [
-  { key:'all', label:'All', color:C.rose },
+const DEFAULT_IDEA_CATS = [
   { key:'business', label:'#business', color:'#34a853' },
   { key:'content', label:'#content', color:'#4285f4' },
   { key:'personal', label:'#personal', color:C.accent },
@@ -2748,6 +2747,7 @@ const IDEA_CATEGORIES = [
   { key:'research', label:'#research', color:'#ea4335' },
   { key:'someday', label:'#someday', color:C.textMuted },
 ];
+const CAT_COLORS = ['#34a853','#4285f4','#ea4335','#fbbc04','#9c27b0','#ff6d00','#00bcd4','#e91e63','#795548','#607d8f'];
 const IDEA_TEMPLATES = [
   { name:'Blank', content:'' },
   { name:'Business Idea', content:'Problem:\n\nSolution:\n\nTarget audience:\n\nRevenue model:\n\nFirst step:' },
@@ -2758,7 +2758,11 @@ const IDEA_TEMPLATES = [
 ];
 const IdeaBank = () => {
   const IK='nylaos_ideas';
+  const CK='nylaos_idea_categories';
   const [ideas, setIdeas] = useState(()=>JSON.parse(localStorage.getItem(IK)||'[]'));
+  const [customCats, setCustomCats] = useState(()=>JSON.parse(localStorage.getItem(CK)||'null')||DEFAULT_IDEA_CATS);
+  const IDEA_CATEGORIES = [{key:'all',label:'All',color:C.rose}, ...customCats];
+  const saveCats = c => { setCustomCats(c); localStorage.setItem(CK,JSON.stringify(c)); };
   const [filter, setFilter] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -2768,7 +2772,22 @@ const IdeaBank = () => {
   const [editId, setEditId] = useState(null);
   const [editContent, setEditContent] = useState('');
   const [searchQ, setSearchQ] = useState('');
+  const [showAddCat, setShowAddCat] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatColor, setNewCatColor] = useState(CAT_COLORS[0]);
   const save = i => { setIdeas(i); localStorage.setItem(IK,JSON.stringify(i)); };
+  const addCategory = () => {
+    const name = newCatName.trim().toLowerCase().replace(/^#/,'');
+    if(!name) return;
+    if(customCats.some(c=>c.key===name)) { toast('Category already exists','error'); return; }
+    saveCats([...customCats, {key:name, label:'#'+name, color:newCatColor}]);
+    setNewCatName(''); setShowAddCat(false);
+    toast('Category added','success',1500);
+  };
+  const removeCategory = (key) => {
+    saveCats(customCats.filter(c=>c.key!==key));
+    if(filter===key) setFilter('all');
+  };
   const add = () => {
     if(!newTitle.trim()) return;
     save([{id:Date.now(),title:newTitle.trim(),content:newContent,category:newCat,created:new Date().toISOString()},...ideas]);
@@ -2802,17 +2821,38 @@ const IdeaBank = () => {
       </div>
 
       {/* Category filters */}
-      <div style={{display:'flex',gap:6,marginBottom:18,flexWrap:'wrap',padding:'0 4px'}}>
+      <div style={{display:'flex',gap:6,marginBottom:showAddCat?8:18,flexWrap:'wrap',padding:'0 4px',alignItems:'center'}}>
         {IDEA_CATEGORIES.map(cat=>(
-          <button key={cat.key} onClick={()=>setFilter(cat.key)} style={{
-            padding:'5px 14px',borderRadius:20,fontSize:12,cursor:'pointer',fontWeight:filter===cat.key?600:400,
-            background:filter===cat.key?cat.color:'transparent',
-            color:filter===cat.key?'#fff':cat.color,
-            border:`1px solid ${filter===cat.key?cat.color:cat.color+'50'}`,
-            transition:'all 0.15s',
-          }}>{cat.label}</button>
+          <div key={cat.key} style={{position:'relative',display:'inline-flex'}}>
+            <button onClick={()=>setFilter(cat.key)} style={{
+              padding:'5px 14px',borderRadius:20,fontSize:12,cursor:'pointer',fontWeight:filter===cat.key?600:400,
+              background:filter===cat.key?cat.color:'transparent',
+              color:filter===cat.key?'#fff':cat.color,
+              border:`1px solid ${filter===cat.key?cat.color:cat.color+'50'}`,
+              transition:'all 0.15s',
+            }}>{cat.label}</button>
+            {cat.key!=='all'&&!DEFAULT_IDEA_CATS.some(d=>d.key===cat.key)&&(
+              <button onClick={(e)=>{e.stopPropagation();removeCategory(cat.key);}} style={{position:'absolute',top:-4,right:-4,width:14,height:14,borderRadius:'50%',background:C.textMuted,color:'#fff',border:'none',fontSize:9,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1}}>×</button>
+            )}
+          </div>
         ))}
+        <button onClick={()=>setShowAddCat(!showAddCat)} style={{padding:'5px 12px',borderRadius:20,fontSize:12,cursor:'pointer',background:'transparent',color:C.textMuted,border:`1px dashed ${C.border}`,transition:'all 0.15s'}}>+ Add</button>
       </div>
+      {showAddCat && (
+        <Card style={{marginBottom:14,padding:'12px 16px',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:11,color:C.textMuted}}>#</span>
+          <input autoFocus value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="category name"
+            onKeyDown={e=>e.key==='Enter'&&addCategory()}
+            style={{width:140,padding:'5px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit'}}/>
+          <div style={{display:'flex',gap:4}}>
+            {CAT_COLORS.map(clr=>(
+              <button key={clr} onClick={()=>setNewCatColor(clr)} style={{width:18,height:18,borderRadius:'50%',background:clr,border:newCatColor===clr?'2px solid #fff':'2px solid transparent',cursor:'pointer',boxShadow:newCatColor===clr?`0 0 0 1.5px ${clr}`:'none'}}/>
+            ))}
+          </div>
+          <button onClick={addCategory} style={{padding:'5px 14px',borderRadius:8,background:C.rose,color:'#fff',border:'none',fontSize:11,cursor:'pointer'}}>Add</button>
+          <button onClick={()=>setShowAddCat(false)} style={{padding:'5px 10px',borderRadius:8,background:'transparent',border:'none',color:C.textMuted,fontSize:11,cursor:'pointer'}}>Cancel</button>
+        </Card>
+      )}
 
       {/* Add new idea modal */}
       {showAdd && (
