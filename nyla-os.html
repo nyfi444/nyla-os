@@ -292,13 +292,21 @@ window._exportNotebookMd=function(){
 window._exportToGoogleDrive=function(){
   const md=window._exportNotebookMd();
   if(!md){alert('No notebooks to export.');return;}
-  const blob=new Blob([md],{type:'text/markdown'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url; a.download='nyla-os-notebooks.md'; a.click();
-  URL.revokeObjectURL(url);
-  if(typeof toast==='function') toast('Notebooks exported — opening Google Drive','success');
-  setTimeout(()=>window.open('https://drive.google.com/drive/my-drive','_blank'),500);
+  navigator.clipboard.writeText(md).then(()=>{
+    if(typeof toast==='function') toast('Copied to clipboard — paste into your new Google Doc','success',3000);
+  }).catch(()=>{
+    if(typeof toast==='function') toast('Opening Google Doc — copy manually','info',2500);
+  });
+  setTimeout(()=>window.open('https://docs.google.com/document/create','_blank'),400);
+};
+window._exportSingleToGoogleDoc=function(title, content){
+  const text = title + '\n\n' + (content||'');
+  navigator.clipboard.writeText(text).then(()=>{
+    if(typeof toast==='function') toast('Copied — paste into your new Google Doc','success',3000);
+  }).catch(()=>{
+    if(typeof toast==='function') toast('Opening Google Doc — copy manually','info',2500);
+  });
+  setTimeout(()=>window.open('https://docs.google.com/document/create','_blank'),400);
 };
 
 async function _writeNotebookFile(){
@@ -2795,9 +2803,7 @@ const IdeaBank = () => {
     w.document.close(); w.print();
   };
   const exportIdeaDrive = (idea) => {
-    const blob = new Blob([idea.title+'\n\n'+(idea.content||'')], {type:'text/plain'});
-    const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=idea.title.replace(/[^a-zA-Z0-9 ]/g,'').trim()+'.txt'; a.click();
-    toast('Downloaded — upload to Google Drive','success',2000);
+    window._exportSingleToGoogleDoc(idea.title, idea.content);
   };
   const sendToNotebook = (idea) => {
     const NK='nylaos_notebook';
