@@ -108,6 +108,13 @@ let _syncState={status:'idle',user:null};
 const _setSyncState=s=>{_syncState=s;_syncSubs.forEach(fn=>fn(s));};
 // Prevents double-reload when _cloudLoad and onSnapshot both fire on sign-in
 let _reloadPending=false;
+// True whenever this device has local writes that haven't been confirmed pushed to the cloud yet.
+// Used to avoid silently overwriting in-progress local edits with an older/racing remote save, and
+// persisted to localStorage (via _rawLS, so it doesn't re-trigger itself) so a refresh/reopen can
+// tell whether the previous session ended before its changes finished syncing to the cloud.
+let _dirty = localStorage.getItem('nylaos_dirty_flag')==='true';
+const _setDirty = v => { _dirty=v; _rawLS('nylaos_dirty_flag', v?'true':'false'); };
+let _pendingConflict=null; // {snapshot, savedAt, user} — set instead of auto-applying when local is dirty
 
 const useSyncStatus=()=>{
   const [s,setS]=React.useState(_syncState);
@@ -115,7 +122,17 @@ const useSyncStatus=()=>{
   return s;
 };
 
-async function _cloudLoad(){
+const useOnlineStatus=()=>{
+  const [online,setOnline]=React.useState(navigator.onLine);
+  React.useEffect(()=>{
+    const on=()=>setOnline(true), off=()=>setOnline(false);
+    window.addEventListener('online',on); window.addEventListener('offline',off);
+    return ()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};
+  },[]);
+  return online;
+};
+
+async function _cloudLoad(force){
   if(!_fbUser||!_fbDb) return;
   _setSyncState({status:'syncing',user:_fbUser});
   try{
@@ -123,10 +140,23 @@ async function _cloudLoad(){
     if(doc.exists){
       const {snapshot,savedAt}=doc.data();
       const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
-      if(snapshot&&savedAt>localTs){_applyCloudSnapshot(snapshot,savedAt,_fbUser);return;}
+      if(snapshot&&savedAt>localTs){ _maybeApplyOrConflict(snapshot,savedAt,_fbUser,force); return; }
     }
     _setSyncState({status:'synced',user:_fbUser});
   }catch(e){console.warn('Cloud load:',e);_setSyncState({status:'error',user:_fbUser});}
+}
+
+// Guards against silently overwriting local edits that haven't been pushed yet.
+// If this device has unsynced local changes (_dirty) and isn't explicitly forcing
+// a pull, surface a Conflict state instead of blindly applying the remote snapshot
+// and reloading — that silent-overwrite path was a real cause of "notes disappearing".
+function _maybeApplyOrConflict(snapshot, savedAt, user, force){
+  if(!force && _dirty){
+    _pendingConflict={snapshot,savedAt,user};
+    _setSyncState({status:'conflict',user});
+    return;
+  }
+  _applyCloudSnapshot(snapshot,savedAt,user);
 }
 
 function _applyCloudSnapshot(snapshot, savedAt, user){
@@ -136,9 +166,22 @@ function _applyCloudSnapshot(snapshot, savedAt, user){
     if(k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') _rawLS(k,v);
   });
   _rawLS('nylaos_cloud_ts',String(savedAt));
+  _setDirty(false); _pendingConflict=null;
   _setSyncState({status:'synced',user});
   _reloadPending=true;
   window.location.reload();
+}
+
+// Conflict resolution: user explicitly chooses which version wins.
+function resolveConflictKeepLocal(){
+  if(!_pendingConflict) return;
+  _pendingConflict=null;
+  cloudSave();
+}
+function resolveConflictUseCloud(){
+  if(!_pendingConflict) return;
+  const {snapshot,savedAt,user}=_pendingConflict;
+  _applyCloudSnapshot(snapshot,savedAt,user);
 }
 
 async function cloudSave(){
@@ -155,6 +198,7 @@ async function cloudSave(){
       snapshot:JSON.stringify(snap),savedAt,email:_fbUser.email||''
     });
     _rawLS('nylaos_cloud_ts',String(savedAt));
+    _setDirty(false);
     _setSyncState({status:'synced',user:_fbUser});
     if(typeof toast==='function') toast('Synced to cloud','sync',2000);
   }catch(e){console.warn('Cloud save:',e);_setSyncState({status:'error',user:_fbUser});if(typeof toast==='function') toast('Sync failed','error');}
@@ -164,9 +208,12 @@ async function cloudSave(){
 let _nbFileTimer=null;
 localStorage.setItem=function(key,value){
   _rawLS(key,value);
-  if(key&&key.startsWith('nylaos_')&&key!=='nylaos_cloud_ts'&&_fbUser){
-    if(_syncTimer) clearTimeout(_syncTimer);
-    _syncTimer=setTimeout(cloudSave,2500);
+  if(key&&key.startsWith('nylaos_')&&key!=='nylaos_cloud_ts'&&key!=='nylaos_dirty_flag'){
+    _setDirty(true);
+    if(_fbUser){
+      if(_syncTimer) clearTimeout(_syncTimer);
+      _syncTimer=setTimeout(cloudSave,2500);
+    }
   }
   if(key==='nylaos_nb_pages'){
     if(_nbFileTimer) clearTimeout(_nbFileTimer);
@@ -376,13 +423,20 @@ let _cloudListener=null;
         _setSyncState({status:'syncing',user});
         // onSnapshot fires immediately on attach (initial load) AND on remote changes.
         // We skip _cloudLoad entirely to avoid the double-reload race.
+        let _isInitialAttach=true;
         _cloudListener=_fbDb.collection('nylaos').doc(user.uid).onSnapshot(doc=>{
           if(doc.metadata.hasPendingWrites) return; // ignore our own in-flight writes
+          const wasInitialAttach=_isInitialAttach; _isInitialAttach=false;
           if(!doc.exists){_setSyncState({status:'synced',user});return;}
           const {snapshot,savedAt}=doc.data();
           const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
           if(snapshot&&savedAt>localTs){
-            _applyCloudSnapshot(snapshot,savedAt,user);
+            // Force-apply on the initial attach (first sign-in / fresh session load) so signing
+            // in still pulls your cloud data immediately — UNLESS this device already had unsynced
+            // edits when the page loaded (_dirty persists across refreshes). A plain page refresh
+            // re-triggers "initial attach" too, so without this check, refreshing with unsynced
+            // local edits could still silently overwrite them the same way the original bug did.
+            _maybeApplyOrConflict(snapshot,savedAt,user,wasInitialAttach && !_dirty);
           } else {
             _setSyncState({status:'synced',user});
           }
@@ -394,6 +448,28 @@ let _cloudListener=null;
   }catch(e){console.warn('Firebase init:',e);}
 })();
 /* ─────────────────────────────────────────────────────────────────── */
+
+/* ── Refresh / reopen recovery ──────────────────────────────────────
+   Local writes go straight to localStorage synchronously, so a refresh or
+   browser close never loses data on THIS device — the real risk is only
+   that the last session ended before its changes finished pushing to the
+   cloud. _dirty is persisted across reloads, so on boot we can tell. */
+(function(){
+  const wasDirtyOnBoot = _dirty;
+  setTimeout(()=>{
+    if(wasDirtyOnBoot && typeof toast==='function'){
+      toast('Picked up where you left off — your edits are safely on this device','info',2600);
+    }
+    if(wasDirtyOnBoot && _fbUser){ cloudSave(); }
+  }, 900);
+  // Warn before closing/refreshing a tab with edits that haven't finished syncing to the cloud yet.
+  window.addEventListener('beforeunload', e=>{
+    if(_dirty && _fbUser){
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+})();
 
 const useIsMobile = () => {
   const [v, setV] = useState(() => window.innerWidth < 700);
@@ -491,15 +567,15 @@ const TAG_COLORS = {
 /* ── Nav ────────────────────────────────────────────────────────── */
 const NAV = [
   { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes'] },
-  { id:'calendar',   label:'Calendar',   sub:['Monthly','Daily','Weekly','Quarterly','Yearly','Event Planner'] },
+  { id:'calendar',   label:'Calendar',   sub:['Monthly','Daily','Weekly','Quarterly','Yearly','Event Planner','Recently Deleted'] },
   { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Kanban','Eisenhower','Bucket List','Habits','Bored Bucket','Pros & Cons','Projects','Completed','Recently Deleted'] },
   { id:'period',     label:'Period',     sub:['Cycle Overview','Phase Log','Symptoms','Learn'] },
   { id:'ideas',      label:'Ideas',      sub:[] },
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Dream Life','Recently Deleted'] },
   { id:'business',   label:'Business',   sub:['Lunar Love','Halo House Collective Co.','Love Sativa','Dropshipping'] },
-  { id:'cosmic',     label:'Cosmic',     sub:['Moon Phase','Numerology','Astrology','Matrix of Destiny'] },
-  { id:'university', label:'University', sub:['Courses','Assignments','GPA Calculator','Resources'] },
+  { id:'cosmic',     label:'Cosmic',     sub:['Numerology','Astrology','Matrix of Destiny'] },
+  { id:'university', label:'University', sub:['Dashboard','Upload Syllabus','Courses','Assignments','GPA Calculator','Resources','Recently Deleted'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
   { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
 ];
@@ -567,6 +643,104 @@ const arcPath = (cx, cy, r, a1, a2) => {
 };
 
 const sanitize = s => s.replace(/[^a-zA-Z0-9]/g, '_');
+
+/* ── Shared Download Utility ──────────────────────────────────────
+   Real client-side file downloads (no backend needed) — used anywhere
+   Print/PDF/Drive appears, per the "Download must also appear" rule.  */
+const downloadTextFile = (filename, content, mime='text/plain') => {
+  const blob = new Blob([content], {type: `${mime};charset=utf-8`});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+};
+const downloadAsTxt = (title, content) => downloadTextFile(`${sanitize(title)||'export'}.txt`, `${title}\n\n${_htmlToText(content||'')}`);
+const downloadAsMarkdown = (title, content) => downloadTextFile(`${sanitize(title)||'export'}.md`, `# ${title}\n\n${_htmlToText(content||'')}`, 'text/markdown');
+const downloadAsDocx = (title, content) => {
+  // Word opens HTML saved with a .doc extension + the msword MIME type — a real, widely-supported
+  // trick that avoids needing a heavyweight docx-generation library for a no-build-step app.
+  const body = content && content.includes('<') ? content : (content||'').split('\n').filter(Boolean).map(p=>`<p>${p}</p>`).join('');
+  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+    <head><meta charset="utf-8"><title>${title}</title></head>
+    <body><h1 style="font-family:Georgia,serif;color:#c4607a;">${title}</h1>${body||'<p></p>'}</body></html>`;
+  downloadTextFile(`${sanitize(title)||'export'}.doc`, html, 'application/msword');
+};
+const downloadAsCsv = (title, rows) => {
+  const csv = rows.map(r=>r.map(cell=>`"${String(cell??'').replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  downloadTextFile(`${sanitize(title)||'export'}.csv`, csv, 'text/csv');
+};
+const printAsPdf = (title, content, meta='') => {
+  const w = window.open('', '_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:24px;color:#c4607a;}</style></head><body><h1>${title}</h1>${meta?`<p style="font-size:11px;color:#aaa;">${meta}</p>`:''}<hr style="border:none;border-top:1px solid #eee;margin:16px 0;"><div style="white-space:pre-wrap;line-height:2;">${_htmlToText(content||'')||'(no content)'}</div></body></html>`);
+  w.document.close(); w.print();
+};
+
+/* Reusable export menu — Download TXT/Markdown, Print/PDF, Save to Google Drive, Copy link.
+   Attach anywhere Print/PDF/Drive export appears so Download is always available alongside it. */
+const ExportMenu = ({ title, content, meta='', csvData=null, onSaveToNotebook=null }) => {
+  const [open, setOpen] = useState(false);
+  const items = [
+    ['📄 Download TXT',      () => downloadAsTxt(title, content)],
+    ['📝 Download Markdown', () => downloadAsMarkdown(title, content)],
+    ['📃 Download DOCX',     () => downloadAsDocx(title, content)],
+    ...(csvData ? [['📊 Download CSV', () => downloadAsCsv(title, csvData)]] : []),
+    ['🖨 Print / PDF',        () => printAsPdf(title, content, meta)],
+    ['📁 Save to Google Drive', () => window._exportSingleToGoogleDoc(title, content)],
+    ...(onSaveToNotebook ? [['📓 Save to Notebook', onSaveToNotebook]] : []),
+    ['🔗 Copy link',          () => { navigator.clipboard.writeText(window.location.href); if(typeof toast==='function') toast('Link copied','success',1500); }],
+  ];
+  return (
+    <div style={{position:'relative'}} onClick={e=>e.stopPropagation()}>
+      <button onClick={()=>setOpen(o=>!o)} title="Export"
+        style={{padding:'4px 10px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:10.5,cursor:'pointer'}}>⬇ Export</button>
+      {open && (
+        <div style={{position:'absolute',top:'110%',right:0,zIndex:200,background:C.card,border:`0.5px solid ${C.border}`,
+          borderRadius:12,boxShadow:'0 6px 24px rgba(0,0,0,0.15)',padding:6,minWidth:190,display:'flex',flexDirection:'column',gap:1}}>
+          {items.map(([label,fn])=>(
+            <button key={label} onClick={()=>{fn();setOpen(false);}}
+              style={{textAlign:'left',padding:'8px 10px',borderRadius:8,background:'transparent',border:'none',color:C.text,fontSize:12,cursor:'pointer'}}
+              onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}40`}
+              onMouseLeave={e=>e.currentTarget.style.background='transparent'}>{label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ── Generic Version History ───────────────────────────────────────
+   Reusable across any entity (ideas, notebook pages, ...). Snapshots are
+   pushed BEFORE an edit overwrites tracked fields, capped at 20, newest first.
+   Restoring never destructively reverts — it re-applies the old fields as a
+   normal update, which itself pushes the current state as a new snapshot. */
+const VERSION_HISTORY_MAX = 20;
+const withVersionSnapshot = (entity, trackedFields) => {
+  const snap = { ts: entity.updated || entity.created || new Date().toISOString() };
+  trackedFields.forEach(f => { snap[f] = entity[f]; });
+  const history = [snap, ...(entity.versionHistory||[])].slice(0, VERSION_HISTORY_MAX);
+  return history;
+};
+
+const VersionHistoryPanel = ({ entity, trackedFields, onRestore, onClose }) => {
+  const history = entity.versionHistory || [];
+  return (
+    <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'110%',right:0,zIndex:250,background:C.card,border:`0.5px solid ${C.border}`,
+      borderRadius:12,boxShadow:'0 6px 24px rgba(0,0,0,0.15)',padding:10,minWidth:240,maxHeight:280,overflowY:'auto'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+        <span style={{fontSize:11.5,fontWeight:600,color:C.rose}}>Version History</span>
+        <button onClick={onClose} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:13}}>×</button>
+      </div>
+      {history.length===0 && <div style={{fontSize:11.5,color:C.textMuted,fontStyle:'italic',padding:'6px 2px'}}>No earlier versions yet — one is saved automatically each time you edit.</div>}
+      {history.map((snap,i)=>(
+        <div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 4px',borderBottom:i<history.length-1?`0.5px solid ${C.border}60`:'none'}}>
+          <div style={{flex:1,fontSize:11,color:C.textLight}}>{new Date(snap.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
+          <button onClick={()=>onRestore(snap)} style={{padding:'3px 10px',borderRadius:7,background:`${C.accent}25`,border:'none',color:C.accent,fontSize:10.5,cursor:'pointer'}}>Restore</button>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 /* ── Icons ──────────────────────────────────────────────────────── */
 const icons = {
@@ -654,31 +828,51 @@ const PageTitle = ({ children }) => (
 /* ── Top Bar ────────────────────────────────────────────────────── */
 const SyncButton = () => {
   const sync = useSyncStatus();
+  const online = useOnlineStatus();
   const [open, setOpen] = useState(false);
-  const dotColor = sync.status==='synced'?'#68c97a'
-    :sync.status==='syncing'?C.accent
-    :sync.status==='error'?'#e57373':C.border;
-  const label = sync.status==='syncing'?'Syncing…'
-    :sync.status==='synced'?'Synced'
-    :sync.status==='error'?'Error':'Sync';
+  const effStatus = sync.user && !online ? 'offline' : sync.status;
+  const dotColor = effStatus==='conflict'?'#F4A261'
+    :effStatus==='synced'?'#68c97a'
+    :effStatus==='syncing'?C.accent
+    :effStatus==='error'?'#e57373'
+    :effStatus==='offline'?C.textMuted:C.border;
+  const label = effStatus==='conflict'?'Conflict'
+    :effStatus==='syncing'?'Saving…'
+    :effStatus==='synced'?'Saved'
+    :effStatus==='offline'?'Offline'
+    :effStatus==='error'?'Sync Failed':'Sync';
   return (
     <div style={{position:'relative'}}>
       <button onClick={()=>setOpen(o=>!o)}
         title={sync.user?`Signed in as ${sync.user.email}`:'Enable cross-device sync'}
         style={{display:'flex',alignItems:'center',gap:5,padding:'6px 11px',borderRadius:10,
-          background:`${C.pink}55`,border:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:12,color:C.text}}>
+          background:effStatus==='conflict'?'#F4A26125':`${C.pink}55`,border:`0.5px solid ${effStatus==='conflict'?'#F4A261':C.border}`,cursor:'pointer',fontSize:12,color:C.text}}>
         <span style={{width:7,height:7,borderRadius:'50%',background:dotColor,flexShrink:0,
-          boxShadow:sync.status==='syncing'?`0 0 5px ${C.accent}`:undefined}}/>
+          boxShadow:effStatus==='syncing'?`0 0 5px ${C.accent}`:undefined}}/>
         {label}
       </button>
       {open && (
         <div onClick={e=>e.stopPropagation()}
           style={{position:'absolute',right:0,top:44,background:C.cream,border:`0.5px solid ${C.border}`,
-            borderRadius:14,padding:'18px 20px',boxShadow:'0 6px 28px rgba(0,0,0,0.13)',width:238,zIndex:300}}>
-          {sync.user ? (
+            borderRadius:14,padding:'18px 20px',boxShadow:'0 6px 28px rgba(0,0,0,0.13)',width:260,zIndex:300}}>
+          {sync.user && effStatus==='conflict' ? (
+            <>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:'#F4A261',marginBottom:8}}>Sync conflict</div>
+              <div style={{fontSize:12.5,color:C.textMuted,marginBottom:16,lineHeight:1.6}}>
+                Another device saved changes while this one had unsaved edits. Choose which version to keep — whichever you don't pick will be overwritten.
+              </div>
+              <button onClick={()=>{resolveConflictKeepLocal();setOpen(false);}}
+                style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
+                  border:'none',cursor:'pointer',fontSize:13,marginBottom:6}}>Keep this device's changes</button>
+              <button onClick={()=>{if(window.confirm('Discard this device\'s unsaved changes and load the other device\'s version?')){resolveConflictUseCloud();setOpen(false);}}}
+                style={{width:'100%',padding:'9px',borderRadius:9,background:`${C.lavender}90`,color:C.rose,
+                  border:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:13}}>Use the other device's version</button>
+            </>
+          ) : sync.user ? (
             <>
               <div style={{fontSize:11.5,color:C.textMuted,marginBottom:3}}>Signed in as</div>
               <div style={{fontSize:13,color:C.text,fontWeight:500,marginBottom:16,wordBreak:'break-all'}}>{sync.user.email}</div>
+              {!online && <div style={{fontSize:11.5,color:C.textMuted,marginBottom:12,lineHeight:1.5}}>You're offline — changes are saved on this device and will sync once you're back online.</div>}
               <button onClick={()=>{cloudSave();setOpen(false);}}
                 style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
                   border:'none',cursor:'pointer',fontSize:13,marginBottom:6}}>↑ Push — save to cloud</button>
@@ -1221,8 +1415,16 @@ const DayPanel = ({ dateKey, label }) => {
     const nowDone = !allTasks.find(t=>t.id===id)?.done;
     saveTasks(allTasks.map(t=>t.id===id?{...t,done:nowDone,completedDate:nowDone?dateKey:null}:t));
   };
-  const removeItem = id => saveTasks(allTasks.filter(t=>t.id!==id));
-  const removeEvent = id => saveEvents(events.filter(e=>e.id!==id));
+  const removeItem = id => {
+    const item = allTasks.find(t=>t.id===id);
+    if (item) addToTrash('task', item.text, item, TASKS_KEY);
+    saveTasks(allTasks.filter(t=>t.id!==id));
+  };
+  const removeEvent = id => {
+    const evt = events.find(e=>e.id===id);
+    if (evt) addToTrash('calendar_event', evt.text, evt, 'nylaos_events');
+    saveEvents(events.filter(e=>e.id!==id));
+  };
   const startEdit = item => { setEditId(item.id); setEditText(item.text); setEditTime(item.time||''); };
   const saveEdit = () => {
     saveTasks(allTasks.map(t=>t.id===editId?{...t,text:editText.trim()||t.text,time:editTime||null}:t));
@@ -1479,6 +1681,8 @@ const CalendarPanel = ({ sub }) => {
     );
   }
 
+  if (sub==='Recently Deleted') return <TrashPanel type="calendar_event" />;
+
   /* YEARLY */
   return (
     <div className="fade-in" style={{ maxWidth:820 }}>
@@ -1515,26 +1719,24 @@ const restoreTrashItem = id => {
   return item;
 };
 const permanentDelete = id => saveTrash(getTrash().filter(t=>t.id!==id));
-const purgeOldTrash = () => {
-  const cutoff = Date.now() - 30*24*60*60*1000;
-  saveTrash(getTrash().filter(t=>new Date(t.deletedAt).getTime()>cutoff));
-};
 
-const TrashPanel = ({ type, onRestoreBusiness }) => {
-  const [trash, setTrash] = useState(()=>{ purgeOldTrash(); return getTrash(); });
-  const filtered = type ? trash.filter(t=>t.type===type) : trash;
+const TrashPanel = ({ type, onRestoreBusiness, onRestore }) => {
+  const [trash, setTrash] = useState(()=>getTrash());
+  const types = Array.isArray(type) ? type : type ? [type] : null;
+  const filtered = types ? trash.filter(t=>types.includes(t.type)) : trash;
   const refresh = () => setTrash(getTrash());
   const handleRestore = item => {
     if (item.type==='business' && onRestoreBusiness) {
       onRestoreBusiness(item.data.name);
       permanentDelete(item.id);
     } else {
-      restoreTrashItem(item.id);
+      const restored = restoreTrashItem(item.id);
+      if (onRestore) onRestore(restored);
     }
     refresh();
   };
   const handleDelete = id => { permanentDelete(id); refresh(); };
-  const typeLabel = { task:'Task', goal:'Goal', business:'Business', notebook_page:'Note' };
+  const typeLabel = { task:'Task', goal:'Goal', business:'Business', notebook_page:'Note', idea:'Idea', calendar_event:'Calendar Event', course:'Course', assignment:'Assignment', habit:'Habit', bucket_item:'Bucket List Item', project:'Project' };
   return (
     <div className="fade-in" style={{ maxWidth:620 }}>
       <PageTitle>Recently Deleted</PageTitle>
@@ -1551,7 +1753,7 @@ const TrashPanel = ({ type, onRestoreBusiness }) => {
                   <div style={{ fontSize:11.5, color:C.textMuted, marginTop:3 }}>{typeLabel[item.type]||item.type} · Deleted {whenStr}</div>
                 </div>
                 <button onClick={()=>handleRestore(item)} style={{ padding:'6px 14px', borderRadius:8, background:`${C.accent}25`, border:`0.5px solid ${C.border}`, color:C.text, fontSize:12, cursor:'pointer' }}>Restore</button>
-                <button onClick={()=>handleDelete(item.id)} style={{ padding:'6px 14px', borderRadius:8, background:'none', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:12, cursor:'pointer' }}>Delete forever</button>
+                <button onClick={()=>{ if(window.confirm(`Permanently delete "${item.name}"? This cannot be undone.`)) handleDelete(item.id); }} style={{ padding:'6px 14px', borderRadius:8, background:'none', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:12, cursor:'pointer' }}>Delete forever</button>
               </div>
             </Card>
           );
@@ -1559,8 +1761,8 @@ const TrashPanel = ({ type, onRestoreBusiness }) => {
       </div>
       {filtered.length>0 && (
         <div style={{ marginTop:20, fontSize:12.5, color:C.textMuted }}>
-          Items are automatically removed after 30 days ·{' '}
-          <button onClick={()=>{ filtered.forEach(t=>permanentDelete(t.id)); refresh(); }} style={{ background:'none', border:'none', cursor:'pointer', color:C.rose, fontSize:12.5, textDecoration:'underline' }}>Clear all</button>
+          Items stay here until you delete them permanently — nothing is removed automatically ·{' '}
+          <button onClick={()=>{ if(window.confirm(`Permanently delete all ${filtered.length} item(s) in this view? This cannot be undone.`)){ filtered.forEach(t=>permanentDelete(t.id)); refresh(); } }} style={{ background:'none', border:'none', cursor:'pointer', color:C.rose, fontSize:12.5, textDecoration:'underline' }}>Delete all permanently</button>
         </div>
       )}
     </div>
@@ -1638,7 +1840,11 @@ const HabitTracker = () => {
     if(nl[k]) toast('Habit checked ✓','success',1200);
   };
   const addHabit = () => { if(!newHabit.trim()) return; saveHabits([...habits,{id:Date.now(),name:newHabit.trim()}]); setNewHabit(''); };
-  const removeHabit = id => { saveHabits(habits.filter(h=>h.id!==id)); };
+  const removeHabit = id => {
+    const h = habits.find(x=>x.id===id);
+    if (h) addToTrash('habit', h.name, h, HK);
+    saveHabits(habits.filter(x=>x.id!==id));
+  };
   const days = [];
   for(let i=27;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(d); }
   const getStreak = (habitId) => { let s=0; for(let i=0;i<28;i++){ const d=new Date(); d.setDate(d.getDate()-i); if(log[`${habitId}_${toDateKey(d)}`]) s++; else break; } return s; };
@@ -1701,7 +1907,11 @@ const BucketList = () => {
     save(items.map(i=>i.id===id?{...i,done:nowDone,completedDate:nowDone?new Date().toISOString():null}:i));
     if(nowDone) toast('Bucket list item checked off! 🎉','success');
   };
-  const remove = id => save(items.filter(i=>i.id!==id));
+  const remove = id => {
+    const it = items.find(x=>x.id===id);
+    if (it) addToTrash('bucket_item', it.text, it, BK);
+    save(items.filter(x=>x.id!==id));
+  };
   const filtered = filter==='all'?items:filter==='done'?items.filter(i=>i.done):items.filter(i=>i.level===filter&&!i.done);
   const doneCount = items.filter(i=>i.done).length;
   return (
@@ -1770,7 +1980,12 @@ const EventPlanner = () => {
   };
   const updateEvent = (id, field, val) => save(events.map(e=>e.id===id?{...e,[field]:val}:e));
   const updateSection = (id, section, val) => save(events.map(e=>e.id===id?{...e,sections:{...e.sections,[section]:val}}:e));
-  const removeEvent = id => { save(events.filter(e=>e.id!==id)); if(activeId===id) setActiveId(null); };
+  const removeEvent = id => {
+    const ev = events.find(e=>e.id===id);
+    if (ev) addToTrash('calendar_event', ev.name, ev, EK);
+    save(events.filter(e=>e.id!==id));
+    if(activeId===id) setActiveId(null);
+  };
   const active = events.find(e=>e.id===activeId);
 
   return (
@@ -2196,6 +2411,46 @@ const DreamLifeBlueprint = () => {
   );
 };
 
+/* ── Projects ───────────────────────────────────────────────────── */
+const ProjectsPanel = () => {
+  const PJK = 'nylaos_projects';
+  const [projects, setProjects] = useState(()=>JSON.parse(localStorage.getItem(PJK)||'[]'));
+  const [newTitle, setNewTitle] = useState('');
+  const save = p => { setProjects(p); localStorage.setItem(PJK, JSON.stringify(p)); };
+  const add = () => {
+    if (!newTitle.trim()) return;
+    save([{id:Date.now(), title:newTitle.trim(), description:'', status:'active', created:new Date().toISOString()}, ...projects]);
+    setNewTitle('');
+  };
+  const toggleStatus = id => save(projects.map(p=>p.id===id?{...p, status:p.status==='done'?'active':'done'}:p));
+  const remove = id => {
+    const p = projects.find(x=>x.id===id);
+    if (p) addToTrash('project', p.title, p, PJK);
+    save(projects.filter(x=>x.id!==id));
+  };
+  return (
+    <div className="fade-in" style={{maxWidth:680}}>
+      <PageTitle>Projects</PageTitle>
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        <InlineInput value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="New project name..." onKeyDown={e=>e.key==='Enter'&&add()} style={{flex:1}}/>
+        <button onClick={add} style={{padding:'9px 20px',borderRadius:12,background:C.rose,color:'#fff',border:'none',fontSize:13,fontWeight:500,cursor:'pointer'}}>+ New Project</button>
+      </div>
+      {projects.length===0 && <div style={{fontSize:13.5,color:C.textMuted,fontStyle:'italic',padding:'16px 4px'}}>No projects yet — convert an idea to a project from the Idea Bank, or add one above.</div>}
+      {projects.map(p=>(
+        <Card key={p.id} style={{marginBottom:8,padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
+          <Checkbox checked={p.status==='done'} onChange={()=>toggleStatus(p.id)}/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13.5,color:C.text,textDecoration:p.status==='done'?'line-through':'none'}}>{p.title}</div>
+            {p.description && <div style={{fontSize:11.5,color:C.textLight,marginTop:2}}>{p.description}</div>}
+            {p.sourceIdeaId && <div style={{fontSize:10.5,color:C.textMuted,marginTop:2}}>From Idea Bank</div>}
+          </div>
+          <button onClick={()=>remove(p.id)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:16,opacity:0.6}}>×</button>
+        </Card>
+      ))}
+    </div>
+  );
+};
+
 const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
   const [tasks, setTasks] = useState(()=>JSON.parse(localStorage.getItem(storageKey)||'[]'));
   const [input, setInput] = useState('');
@@ -2262,12 +2517,13 @@ const TasksPanel = ({ sub, storageKey='nylaos_tasks' }) => {
     setEditTaskId(null);
   };
 
-  if (sub==='Recently Deleted') return <TrashPanel type="task" />;
+  if (sub==='Recently Deleted') return <TrashPanel type={['task','habit','bucket_item','project']} />;
   if (sub==='Kanban') return <KanbanBoard storageKey={storageKey} />;
   if (sub==='Eisenhower') return <EisenhowerMatrix storageKey={storageKey} />;
   if (sub==='Bucket List') return <BucketList />;
   if (sub==='Habits') return <HabitTracker />;
   if (sub==='Bored Bucket') return <BoredBucket />;
+  if (sub==='Projects') return <ProjectsPanel />;
 
   const isCompleted = sub==='Completed';
   const filtered = isCompleted ? tasks.filter(t=>t.done && t.source!=='calendar') : tasks.filter(t=>!t.done && t.source!=='calendar');
@@ -2512,19 +2768,19 @@ const RichEditorComponent = ({ pageId, initialContent, onUpdate, onMount }) => {
     <div style={{ flex:1, overflowY:'auto', position:'relative', display:'flex', flexDirection:'column' }}>
       {pastePrompt && (
         <div style={{ position:'absolute', left: Math.min(pastePrompt.x, 260), top: pastePrompt.y, zIndex:100,
-          background:'#fff', border:'0.5px solid #e8c8d8', borderRadius:12, boxShadow:'0 4px 20px #c4607a18',
+          background:C.card, border:`0.5px solid ${C.border}`, borderRadius:12, boxShadow:'0 4px 20px rgba(196,96,122,0.15)',
           padding:'10px 14px', display:'flex', flexDirection:'column', gap:7, minWidth:210 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:'#a03c5a', letterSpacing:0.3, marginBottom:2 }}>How would you like to paste?</div>
+          <div style={{ fontSize:11, fontWeight:600, color:C.roseDark, letterSpacing:0.3, marginBottom:2 }}>How would you like to paste?</div>
           <button onMouseDown={e=>{e.preventDefault();commitPaste(true);}}
-            style={{ padding:'7px 12px', borderRadius:8, background:'#f5e8ef', border:'0.5px solid #e8c8d8', color:'#7a2040', fontSize:12, cursor:'pointer', textAlign:'left', fontWeight:500 }}>
+            style={{ padding:'7px 12px', borderRadius:8, background:C.pinkLight, border:`0.5px solid ${C.border}`, color:C.text, fontSize:12, cursor:'pointer', textAlign:'left', fontWeight:500 }}>
             ✦ Keep formatting
           </button>
           <button onMouseDown={e=>{e.preventDefault();commitPaste(false);}}
-            style={{ padding:'7px 12px', borderRadius:8, background:'transparent', border:'0.5px solid #e8c8d8', color:'#7a4060', fontSize:12, cursor:'pointer', textAlign:'left' }}>
+            style={{ padding:'7px 12px', borderRadius:8, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textLight, fontSize:12, cursor:'pointer', textAlign:'left' }}>
             Aa Plain text only
           </button>
           <button onMouseDown={e=>{e.preventDefault();setPastePrompt(null);}}
-            style={{ fontSize:10.5, color:'#b090a0', background:'none', border:'none', cursor:'pointer', textAlign:'left', padding:'2px 0' }}>Cancel</button>
+            style={{ fontSize:10.5, color:C.textMuted, background:'none', border:'none', cursor:'pointer', textAlign:'left', padding:'2px 0' }}>Cancel</button>
         </div>
       )}
       <div ref={ref} contentEditable suppressContentEditableWarning className="rich-editor"
@@ -2612,13 +2868,14 @@ const NoteGraph = ({ pages, folders, activePid, onSelectPage }) => {
     nodes.forEach(n=>nodeMap[n.id]=n);
 
     let animId, hoverId=null;
-    const CREAM='#fdfaf7', LAVENDER='#d4c0f0';
+    const CREAM=_dk?'#1c1520':'#fdfaf7', LAVENDER='#d4c0f0';
+    const LABEL_COLOR=_dk?'#f0e0e8ee':'#3a1828ee', LEGEND_COLOR=_dk?'#e8d0dccc':'#5a2a40cc';
 
     const draw=()=>{
       const cw=canvas.width, ch=canvas.height;
       ctx.fillStyle=CREAM; ctx.fillRect(0,0,cw,ch);
       // Grid dots
-      ctx.fillStyle='#e8d8e040';
+      ctx.fillStyle=_dk?'#3a2a3560':'#e8d8e040';
       for(let gx=0;gx<cw;gx+=28) for(let gy=0;gy<ch;gy+=28){
         ctx.beginPath(); ctx.arc(gx,gy,1,0,Math.PI*2); ctx.fill();
       }
@@ -2655,7 +2912,7 @@ const NoteGraph = ({ pages, folders, activePid, onSelectPage }) => {
           const label=n.name.length>16?n.name.slice(0,15)+'…':n.name;
           ctx.font=`${isActive||isHover?600:400} ${isActive?11:10}px DM Sans,sans-serif`;
           ctx.textAlign='center';
-          ctx.fillStyle='#3a1828ee';
+          ctx.fillStyle=LABEL_COLOR;
           ctx.fillText(label,n.x,n.y-r-5);
         }
       });
@@ -2666,7 +2923,7 @@ const NoteGraph = ({ pages, folders, activePid, onSelectPage }) => {
         const col=folderColorMap[f.id]||'#9080d8';
         ctx.beginPath(); ctx.arc(lx+5,ly+5,5,0,Math.PI*2); ctx.fillStyle=col; ctx.fill();
         ctx.font='500 10px DM Sans,sans-serif'; ctx.textAlign='left';
-        ctx.fillStyle='#5a2a40cc';
+        ctx.fillStyle=LEGEND_COLOR;
         ctx.fillText(f.name,lx+13,ly+9);
         lx+=ctx.measureText(f.name).width+30;
         if(lx>canvas.width-80){ lx=14; ly+=18; }
@@ -2733,7 +2990,7 @@ const NoteGraph = ({ pages, folders, activePid, onSelectPage }) => {
   },[pages.length, pages.map(p=>p.id+p.name+p.folderId).join(',')]);
 
   return (
-    <div style={{flex:1,display:'flex',flexDirection:'column',background:'#fdfaf7',minWidth:0,position:'relative'}}>
+    <div style={{flex:1,display:'flex',flexDirection:'column',background:C.cream,minWidth:0,position:'relative'}}>
       <div style={{padding:'10px 18px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
         <span style={{fontFamily:"'DM Serif Display',serif",fontSize:15,color:C.rose}}>Graph View</span>
         <span style={{fontSize:11,color:C.textMuted}}>{pages.length} notes · nodes sized by connections · colors by notebook</span>
@@ -2797,20 +3054,40 @@ const IdeaBank = () => {
   const removePin = id => savePins(moodPins.filter(p=>p.id!==id));
   const updatePin = (id, note) => savePins(moodPins.map(p=>p.id===id?{...p,note}:p));
   const [showMoodboard, setShowMoodboard] = useState(false);
-  const exportIdeaPDF = (idea) => {
-    const w=window.open('','_blank');
-    w.document.write('<!DOCTYPE html><html><head><title>'+idea.title+'</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:24px;color:#c4607a;}</style></head><body><h1>'+idea.title+'</h1><p style="font-size:11px;color:#aaa;">'+new Date(idea.created).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+'</p><hr style="border:none;border-top:1px solid #eee;margin:16px 0;"><div style="white-space:pre-wrap;line-height:2;">'+(idea.content||'(no content)')+'</div></body></html>');
-    w.document.close(); w.print();
+  const NB_DEFAULT_FOLDERS = [
+    {id:1,name:'All Notes',icon:'📝'}, {id:2,name:'Journal',icon:'📖'},
+    {id:3,name:'Ideas',icon:'💡'}, {id:4,name:'Bookmarks',icon:'🔖'},
+  ];
+  const getNotebookFolders = () => { const s=localStorage.getItem('nylaos_nb_folders'); return s?JSON.parse(s):NB_DEFAULT_FOLDERS; };
+  const [folderPickerIdea, setFolderPickerIdea] = useState(null);
+  const sendToNotebook = (idea, folderId) => {
+    // Must write to the same key/shape the actual Notebook system reads (nylaos_nb_pages) —
+    // this used to write to an orphaned 'nylaos_notebook' key that nothing ever displayed,
+    // which is why saving an idea to Notebooks silently did nothing.
+    const PK = 'nylaos_nb_pages';
+    const existing = JSON.parse(localStorage.getItem(PK)||'[]');
+    const pageId = Date.now();
+    const page = {
+      id: pageId, name: idea.title, folderId: folderId || 3 /* default "Ideas" folder */,
+      content: (idea.content||'').split('\n').filter(Boolean).map(p=>`<p>${p}</p>`).join('') || '<p><br></p>',
+      created: new Date().toISOString(), updated: new Date().toISOString(),
+      sourceIdeaId: idea.id,
+    };
+    localStorage.setItem(PK, JSON.stringify([page, ...existing]));
+    // Don't declare success until the page is actually there.
+    const verify = JSON.parse(localStorage.getItem(PK)||'[]');
+    if (!verify.some(p=>p.id===pageId)) { toast('Save to Notebook failed — try again','error'); return; }
+    updateIdea(idea.id, 'notebookPageId', pageId);
+    toast('Saved to Notebook ✓','success',2000);
   };
-  const exportIdeaDrive = (idea) => {
-    window._exportSingleToGoogleDoc(idea.title, idea.content);
-  };
-  const sendToNotebook = (idea) => {
-    const NK='nylaos_notebook';
-    const existing = JSON.parse(localStorage.getItem(NK)||'[]');
-    const note = {id:Date.now(),title:idea.title,content:idea.content||'',folder:'Ideas',tags:[],created:new Date().toISOString(),updated:new Date().toISOString()};
-    localStorage.setItem(NK,JSON.stringify([note,...existing]));
-    toast('Sent to Notebook → Ideas','success',1800);
+  const openNotebookPage = (pageId) => {
+    // Navigate with the page's real folder name — NotebookPanel has a separate effect that
+    // syncs activeFid to whatever folder name the `sub` prop matches, which would otherwise
+    // stomp back over the folder our open-request effect just set.
+    const page = JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]').find(p=>p.id===pageId);
+    const folder = page ? getNotebookFolders().find(f=>f.id===page.folderId) : null;
+    localStorage.setItem('nylaos_nb_open_request', String(pageId));
+    if (window._navigateTo) window._navigateTo('notebook', folder?.name || 'Ideas');
   };
   const save = i => { setIdeas(i); localStorage.setItem(IK,JSON.stringify(i)); };
   const addCategory = () => {
@@ -2831,11 +3108,113 @@ const IdeaBank = () => {
     setNewTitle(''); setNewContent(''); setShowAdd(false);
     toast('Idea captured ✦','success',1500);
   };
-  const remove = id => { save(ideas.filter(i=>i.id!==id)); if(expanded===id) setExpanded(null); };
-  const updateIdea = (id, field, val) => { save(ideas.map(i=>i.id===id?{...i,[field]:val}:i)); };
-  const startEdit = (idea) => { setEditId(idea.id); setEditContent(idea.content||''); };
-  const saveEdit = () => { if(editId) updateIdea(editId,'content',editContent); setEditId(null); };
+  const remove = id => {
+    const idea = ideas.find(i=>i.id===id);
+    if (idea) addToTrash('idea', idea.title, idea, IK);
+    save(ideas.filter(i=>i.id!==id));
+    if(expanded===id) setExpanded(null);
+    toast('Moved to Recently Deleted','success',1800);
+  };
+  const [showTrash, setShowTrash] = useState(false);
+  const refreshIdeasFromStorage = () => setIdeas(JSON.parse(localStorage.getItem(IK)||'[]'));
+  const updateIdea = (id, field, val) => { save(ideas.map(i=>i.id===id?{...i,[field]:val,updated:new Date().toISOString()}:i)); };
+  const IDEA_TRACKED_FIELDS = ['title','content'];
+  const [editTitle, setEditTitle] = useState('');
+  const startEdit = (idea) => { setEditId(idea.id); setEditTitle(idea.title||''); setEditContent(idea.content||''); };
+  const saveEdit = () => {
+    if (editId) {
+      save(ideas.map(i => i.id===editId
+        ? {...i, title:editTitle.trim()||i.title, content:editContent, updated:new Date().toISOString(), versionHistory:withVersionSnapshot(i, IDEA_TRACKED_FIELDS)}
+        : i));
+    }
+    setEditId(null);
+  };
+  const restoreIdeaVersion = (idea, snap) => {
+    save(ideas.map(i => i.id===idea.id
+      ? {...i, title:snap.title, content:snap.content, updated:new Date().toISOString(), versionHistory:withVersionSnapshot(i, IDEA_TRACKED_FIELDS)}
+      : i));
+    toast('Version restored','success',1500);
+  };
   const applyTemplate = (tpl) => { setNewContent(tpl.content); };
+
+  const convertToProject = (idea) => {
+    const PJK = 'nylaos_projects';
+    const projects = JSON.parse(localStorage.getItem(PJK)||'[]');
+    const projectId = Date.now();
+    const project = {id:projectId, title:idea.title, description:idea.content||'', status:'active', sourceIdeaId:idea.id, created:new Date().toISOString()};
+    localStorage.setItem(PJK, JSON.stringify([project, ...projects]));
+    const verify = JSON.parse(localStorage.getItem(PJK)||'[]');
+    if (!verify.some(p=>p.id===projectId)) { toast('Convert to Project failed — try again','error'); return; }
+    updateIdea(idea.id, 'projectId', projectId);
+    toast('Converted to Project ✓','success',1800);
+  };
+  const sendToAgent = (idea) => {
+    const chatEntry = {ts:new Date().toISOString(), summary:`Shared "${idea.title}" with an agent`};
+    const chats = idea.relatedAgentChats || [];
+    updateIdea(idea.id, 'relatedAgentChats', [chatEntry, ...chats]);
+    localStorage.setItem('nylaos_agent_pending_context', JSON.stringify({source:'idea', title:idea.title, content:idea.content||''}));
+    if (window._navigateTo) window._navigateTo('agents', 'My Agents');
+    toast('Sent to Agents — pick an agent to continue','info',2200);
+  };
+  const moveIdea = (idea, category) => { updateIdea(idea.id, 'category', category); toast('Moved','success',1200); };
+  const archiveIdea = (idea) => { updateIdea(idea.id, 'status', idea.status==='archived'?'new':'archived'); };
+
+  const duplicateIdea = (idea) => {
+    const copy = {...idea, id:Date.now(), title:`${idea.title} (copy)`, created:new Date().toISOString(), notebookPageId:undefined};
+    save([copy, ...ideas]);
+    toast('Idea duplicated','success',1500);
+  };
+  const convertToTask = (idea) => {
+    const TK = 'nylaos_tasks';
+    const tasks = JSON.parse(localStorage.getItem(TK)||'[]');
+    const taskId = Date.now();
+    const task = {id:taskId, text:idea.title, done:false, tag:null, notes:idea.content||'', relatedIdeaId:idea.id, created:new Date().toISOString()};
+    localStorage.setItem(TK, JSON.stringify([...tasks, task]));
+    const verify = JSON.parse(localStorage.getItem(TK)||'[]');
+    if (!verify.some(t=>t.id===taskId)) { toast('Convert to Task failed — try again','error'); return; }
+    updateIdea(idea.id, 'taskId', taskId);
+    toast('Added to Tasks ✓','success',1800);
+  };
+  const addIdeaToCalendar = (idea, dateStr) => {
+    if (!dateStr) return;
+    const EK = 'nylaos_events';
+    const events = JSON.parse(localStorage.getItem(EK)||'[]');
+    const eventId = Date.now();
+    const event = {id:eventId, date:dateStr, text:idea.title, relatedIdeaId:idea.id};
+    localStorage.setItem(EK, JSON.stringify([...events, event]));
+    const verify = JSON.parse(localStorage.getItem(EK)||'[]');
+    if (!verify.some(e=>e.id===eventId)) { toast('Add to Calendar failed — try again','error'); return; }
+    updateIdea(idea.id, 'calendarEventId', eventId);
+    toast('Added to Calendar ✓','success',1800);
+  };
+  const [calendarPromptId, setCalendarPromptId] = useState(null);
+  const [detailsOpenId, setDetailsOpenId] = useState(null);
+  const [historyOpenId, setHistoryOpenId] = useState(null);
+  const [movePopoverId, setMovePopoverId] = useState(null);
+  const NB_PAGES_KEY = 'nylaos_nb_pages';
+  const notebookPages = JSON.parse(localStorage.getItem(NB_PAGES_KEY)||'[]');
+  const toggleRelatedNote = (idea, pageId) => {
+    const cur = idea.relatedNoteIds||[];
+    const next = cur.includes(pageId) ? cur.filter(id=>id!==pageId) : [...cur, pageId];
+    updateIdea(idea.id, 'relatedNoteIds', next);
+  };
+  const toggleRelatedBusiness = (idea, biz) => {
+    const cur = idea.relatedBusinessIds||[];
+    const next = cur.includes(biz) ? cur.filter(b=>b!==biz) : [...cur, biz];
+    updateIdea(idea.id, 'relatedBusinessIds', next);
+  };
+  const STATUS_OPTIONS = [
+    {key:'new', label:'New', color:C.textMuted},
+    {key:'in_progress', label:'In Progress', color:'#4285f4'},
+    {key:'on_hold', label:'On Hold', color:'#F4A261'},
+    {key:'done', label:'Done', color:'#4CAF77'},
+    {key:'archived', label:'Archived', color:C.textMuted},
+  ];
+  const PRIORITY_OPTIONS = [
+    {key:'low', label:'Low', color:'#4CAF77'},
+    {key:'medium', label:'Medium', color:'#F4A261'},
+    {key:'high', label:'High', color:C.rose},
+  ];
 
   const filtered = ideas.filter(i=>{
     if(filter!=='all'&&i.category!==filter) return false;
@@ -2847,6 +3226,22 @@ const IdeaBank = () => {
 
   return (
     <div className="fade-in" style={{padding:0}}>
+      {folderPickerIdea && (
+        <div onClick={()=>setFolderPickerIdea(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:400,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.card,borderRadius:16,padding:'20px 22px',width:320,maxHeight:'70vh',overflowY:'auto',boxShadow:'0 12px 40px rgba(0,0,0,0.25)'}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:16,color:C.rose,marginBottom:4}}>Save to Notebook</div>
+            <div style={{fontSize:11.5,color:C.textMuted,marginBottom:14}}>Choose a folder for "{folderPickerIdea.title}"</div>
+            {getNotebookFolders().map(f=>(
+              <button key={f.id} onClick={()=>{sendToNotebook(folderPickerIdea, f.id);setFolderPickerIdea(null);}}
+                style={{display:'flex',alignItems:'center',gap:8,width:'100%',textAlign:'left',padding:'9px 10px',borderRadius:9,background:'transparent',border:`0.5px solid ${C.border}`,color:C.text,fontSize:13,cursor:'pointer',marginBottom:6}}
+                onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}30`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <span>{f.icon||'📁'}</span><span>{f.name}</span>
+              </button>
+            ))}
+            <button onClick={()=>setFolderPickerIdea(null)} style={{width:'100%',padding:'8px',borderRadius:9,background:'transparent',border:'none',color:C.textMuted,fontSize:12,cursor:'pointer',marginTop:4}}>Cancel</button>
+          </div>
+        </div>
+      )}
       {/* Top bar */}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,flexWrap:'wrap',padding:'0 4px'}}>
         <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,color:C.rose,marginRight:8}}>Idea Bank</div>
@@ -2854,9 +3249,17 @@ const IdeaBank = () => {
           <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search by text..."
             style={{width:'100%',padding:'8px 14px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit'}}/>
         </div>
+        <button onClick={()=>setShowTrash(!showTrash)} style={{padding:'8px 14px',borderRadius:10,background:showTrash?`${C.accent}25`:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:12.5,cursor:'pointer'}}>🗑 Recently Deleted</button>
         <button onClick={()=>setShowAdd(true)} style={{padding:'8px 18px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer',fontWeight:500}}>+ New Idea</button>
       </div>
 
+      {showTrash && (
+        <div style={{marginBottom:20}}>
+          <TrashPanel type="idea" onRestore={refreshIdeasFromStorage} />
+        </div>
+      )}
+
+      {!showTrash && <>
       {/* Category filters */}
       <div style={{display:'flex',gap:6,marginBottom:showAddCat?8:18,flexWrap:'wrap',padding:'0 4px',alignItems:'center'}}>
         {IDEA_CATEGORIES.map(cat=>(
@@ -2936,14 +3339,19 @@ const IdeaBank = () => {
               className="card-hover" style={{
                 breakInside:'avoid',marginBottom:12,padding:'14px 16px',borderRadius:14,
                 background:C.card,border:`0.5px solid ${C.border}`,cursor:'pointer',
-                borderTop:`3px solid ${catColor(idea.category)}`,
+                borderTop:`3px solid ${idea.color||catColor(idea.category)}`,
+                opacity:idea.status==='archived'?0.6:1,
                 transition:'all 0.2s',
               }}>
-              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:6}}>
+              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:6,gap:6,flexWrap:'wrap'}}>
                 <div style={{fontSize:10,color:C.textMuted}}>{timeStr}</div>
-                <span style={{fontSize:9.5,padding:'2px 8px',borderRadius:6,background:catColor(idea.category)+'18',color:catColor(idea.category),fontWeight:600}}>
-                  {IDEA_CATEGORIES.find(c=>c.key===idea.category)?.label||idea.category}
-                </span>
+                <div style={{display:'flex',gap:4,flexWrap:'wrap',justifyContent:'flex-end'}}>
+                  {idea.priority && (()=>{ const p=PRIORITY_OPTIONS.find(x=>x.key===idea.priority); return p ? <span style={{fontSize:9,padding:'2px 7px',borderRadius:6,background:p.color+'18',color:p.color,fontWeight:600}}>{p.label}</span> : null; })()}
+                  {idea.status && idea.status!=='new' && (()=>{ const s=STATUS_OPTIONS.find(x=>x.key===idea.status); return s ? <span style={{fontSize:9,padding:'2px 7px',borderRadius:6,background:s.color+'18',color:s.color,fontWeight:600}}>{s.label}</span> : null; })()}
+                  <span style={{fontSize:9.5,padding:'2px 8px',borderRadius:6,background:catColor(idea.category)+'18',color:catColor(idea.category),fontWeight:600}}>
+                    {IDEA_CATEGORIES.find(c=>c.key===idea.category)?.label||idea.category}
+                  </span>
+                </div>
               </div>
               <div style={{fontSize:13.5,fontWeight:500,color:C.text,marginBottom:idea.content?6:0,lineHeight:1.5}}>{idea.title}</div>
               {idea.content&&(
@@ -2955,25 +3363,140 @@ const IdeaBank = () => {
                 <div style={{marginTop:10,display:'flex',gap:6,borderTop:`0.5px solid ${C.border}`,paddingTop:8}} onClick={e=>e.stopPropagation()}>
                   {isEditing?(
                     <div style={{width:'100%'}}>
-                      <textarea autoFocus value={editContent} onChange={e=>setEditContent(e.target.value)}
+                      <input autoFocus value={editTitle} onChange={e=>setEditTitle(e.target.value)} placeholder="Title"
+                        style={{width:'100%',padding:'7px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:13,fontWeight:500,fontFamily:'inherit',marginBottom:6}}/>
+                      <textarea value={editContent} onChange={e=>setEditContent(e.target.value)}
                         style={{width:'100%',height:80,padding:'8px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit',resize:'vertical'}}/>
                       <div style={{display:'flex',gap:6,marginTop:6}}>
                         <button onClick={saveEdit} style={{padding:'5px 14px',borderRadius:8,background:C.rose,color:'#fff',border:'none',fontSize:11,cursor:'pointer'}}>Save</button>
                         <button onClick={()=>setEditId(null)} style={{padding:'5px 14px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>Cancel</button>
                       </div>
                     </div>
-                  ):(<>
-                    <button onClick={()=>startEdit(idea)} style={{padding:'4px 12px',borderRadius:8,background:`${C.pink}50`,border:'none',color:C.rose,fontSize:11,cursor:'pointer'}}>Edit</button>
-                    <select value={idea.category} onChange={e=>updateIdea(idea.id,'category',e.target.value)}
-                      style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
-                      {IDEA_CATEGORIES.filter(c=>c.key!=='all').map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
-                    </select>
-                    <button onClick={()=>exportIdeaPDF(idea)} title="Print / PDF" style={{padding:'4px 10px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:10.5,cursor:'pointer'}}>🖨</button>
-                    <button onClick={()=>exportIdeaDrive(idea)} title="Download for Google Drive" style={{padding:'4px 10px',borderRadius:8,background:'rgba(66,133,244,0.08)',border:'0.5px solid rgba(66,133,244,0.33)',color:'#4285f4',fontSize:10.5,cursor:'pointer'}}>📁</button>
-                    <button onClick={()=>sendToNotebook(idea)} title="Send to Notebook" style={{padding:'4px 10px',borderRadius:8,background:`${C.pink}50`,border:`0.5px solid ${C.border}`,color:C.accent,fontSize:10.5,cursor:'pointer'}}>📓</button>
-                    <div style={{flex:1}}/>
-                    <button onClick={()=>remove(idea.id)} style={{padding:'4px 12px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>Delete</button>
-                  </>)}
+                  ):(<div style={{width:'100%'}}>
+                    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+                      <select value={idea.status||'new'} onChange={e=>updateIdea(idea.id,'status',e.target.value)} title="Status"
+                        style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
+                        {STATUS_OPTIONS.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+                      </select>
+                      <select value={idea.priority||''} onChange={e=>updateIdea(idea.id,'priority',e.target.value)} title="Priority"
+                        style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
+                        <option value="">No priority</option>
+                        {PRIORITY_OPTIONS.map(p=><option key={p.key} value={p.key}>{p.label} priority</option>)}
+                      </select>
+                      <select value={idea.businessArea||''} onChange={e=>updateIdea(idea.id,'businessArea',e.target.value)} title="Business or life area"
+                        style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
+                        <option value="">No business/area</option>
+                        {VENTURES.map(v=><option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </div>
+                    {calendarPromptId===idea.id && (
+                      <div style={{display:'flex',gap:6,marginBottom:8,alignItems:'center'}}>
+                        <input type="date" autoFocus onChange={e=>{addIdeaToCalendar(idea,e.target.value);setCalendarPromptId(null);}}
+                          style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:11}}/>
+                        <button onClick={()=>setCalendarPromptId(null)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:11}}>Cancel</button>
+                      </div>
+                    )}
+
+                    <button onClick={()=>setDetailsOpenId(detailsOpenId===idea.id?null:idea.id)} style={{background:'none',border:'none',color:C.accent,cursor:'pointer',fontSize:10.5,padding:'0 0 8px',textAlign:'left'}}>
+                      {detailsOpenId===idea.id?'▾':'▸'} More details
+                    </button>
+                    {detailsOpenId===idea.id && (
+                      <div style={{marginBottom:10,padding:'10px',borderRadius:10,background:`${C.pinkLight}`,border:`0.5px solid ${C.border}`}}>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:8}}>
+                          <input placeholder="Revenue potential" value={idea.revenuePotential||''} onChange={e=>updateIdea(idea.id,'revenuePotential',e.target.value)}
+                            style={{padding:'5px 8px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:11,fontFamily:'inherit'}}/>
+                          <select value={idea.difficulty||''} onChange={e=>updateIdea(idea.id,'difficulty',e.target.value)}
+                            style={{padding:'5px 8px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:11}}>
+                            <option value="">Difficulty</option><option value="easy">Easy</option><option value="medium">Medium</option><option value="hard">Hard</option>
+                          </select>
+                          <input placeholder="Estimated cost" value={idea.estimatedCost||''} onChange={e=>updateIdea(idea.id,'estimatedCost',e.target.value)}
+                            style={{padding:'5px 8px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:11,fontFamily:'inherit'}}/>
+                          <input placeholder="Estimated time" value={idea.estimatedTime||''} onChange={e=>updateIdea(idea.id,'estimatedTime',e.target.value)}
+                            style={{padding:'5px 8px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:11,fontFamily:'inherit'}}/>
+                        </div>
+                        <textarea placeholder="Research, links, notes..." value={idea.research||''} onChange={e=>updateIdea(idea.id,'research',e.target.value)}
+                          style={{width:'100%',height:50,padding:'6px 8px',borderRadius:7,border:`0.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:11,fontFamily:'inherit',resize:'vertical',marginBottom:8}}/>
+                        <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Card color</div>
+                        <div style={{display:'flex',gap:5,marginBottom:8,flexWrap:'wrap'}}>
+                          <button onClick={()=>updateIdea(idea.id,'color','')} title="Default (category color)" style={{width:16,height:16,borderRadius:'50%',background:C.card,border:`1.5px solid ${C.border}`,cursor:'pointer'}}/>
+                          {CAT_COLORS.map(clr=>(
+                            <button key={clr} onClick={()=>updateIdea(idea.id,'color',clr)} style={{width:16,height:16,borderRadius:'50%',background:clr,border:idea.color===clr?`2px solid ${C.text}`:'1.5px solid transparent',cursor:'pointer'}}/>
+                          ))}
+                        </div>
+                        <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Related businesses</div>
+                        <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:8}}>
+                          {VENTURES.map(v=>{ const on=(idea.relatedBusinessIds||[]).includes(v); return (
+                            <button key={v} onClick={()=>toggleRelatedBusiness(idea,v)} style={{padding:'3px 9px',borderRadius:7,fontSize:10,cursor:'pointer',background:on?`${C.accent}30`:'transparent',border:`0.5px solid ${on?C.accent:C.border}`,color:on?C.accent:C.textMuted}}>{v}</button>
+                          ); })}
+                        </div>
+                        {notebookPages.length>0 && (<>
+                          <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Related notes</div>
+                          <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                            {notebookPages.slice(0,12).map(p=>{ const on=(idea.relatedNoteIds||[]).includes(p.id); return (
+                              <button key={p.id} onClick={()=>toggleRelatedNote(idea,p.id)} style={{padding:'3px 9px',borderRadius:7,fontSize:10,cursor:'pointer',background:on?`${C.accent}30`:'transparent',border:`0.5px solid ${on?C.accent:C.border}`,color:on?C.accent:C.textMuted}}>{p.name}</button>
+                            ); })}
+                          </div>
+                        </>)}
+                        {idea.relatedAgentChats?.length>0 && (
+                          <div style={{fontSize:10,color:C.textMuted,marginTop:8}}>Sent to an agent {idea.relatedAgentChats.length}× · last {new Date(idea.relatedAgentChats[0].ts).toLocaleDateString()}</div>
+                        )}
+                      </div>
+                    )}
+
+                    <div style={{display:'flex',gap:6,flexWrap:'wrap',position:'relative'}}>
+                      <button onClick={()=>startEdit(idea)} style={{padding:'4px 12px',borderRadius:8,background:`${C.pink}50`,border:'none',color:C.rose,fontSize:11,cursor:'pointer'}}>Edit</button>
+                      <button onClick={()=>duplicateIdea(idea)} title="Duplicate" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>⧉ Duplicate</button>
+                      <button onClick={()=>setMovePopoverId(movePopoverId===idea.id?null:idea.id)} title="Move" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>↪ Move</button>
+                      {movePopoverId===idea.id && (
+                        <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'110%',left:0,zIndex:220,background:C.card,border:`0.5px solid ${C.border}`,borderRadius:10,boxShadow:'0 6px 20px rgba(0,0,0,0.15)',padding:8,minWidth:150}}>
+                          <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Move to category</div>
+                          {IDEA_CATEGORIES.filter(c=>c.key!=='all').map(c=>(
+                            <button key={c.key} onClick={()=>{moveIdea(idea,c.key);setMovePopoverId(null);}} style={{display:'block',width:'100%',textAlign:'left',padding:'5px 8px',borderRadius:6,background:'transparent',border:'none',color:C.text,fontSize:11,cursor:'pointer'}}
+                              onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}40`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>{c.label}</button>
+                          ))}
+                        </div>
+                      )}
+                      <button onClick={()=>archiveIdea(idea)} title={idea.status==='archived'?'Unarchive':'Archive'} style={{padding:'4px 10px',borderRadius:8,background:idea.status==='archived'?`${C.accent}25`:'transparent',border:`0.5px solid ${idea.status==='archived'?C.accent:C.border}`,color:idea.status==='archived'?C.accent:C.textMuted,fontSize:10.5,cursor:'pointer'}}>🗄 {idea.status==='archived'?'Unarchive':'Archive'}</button>
+                      <div style={{position:'relative',display:'inline-block'}}>
+                        <button onClick={()=>setHistoryOpenId(historyOpenId===idea.id?null:idea.id)} title="Version History" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
+                          🕐 History{idea.versionHistory?.length?` (${idea.versionHistory.length})`:''}
+                        </button>
+                        {historyOpenId===idea.id && (
+                          <VersionHistoryPanel entity={idea} trackedFields={IDEA_TRACKED_FIELDS}
+                            onRestore={snap=>{restoreIdeaVersion(idea,snap);setHistoryOpenId(null);}}
+                            onClose={()=>setHistoryOpenId(null)} />
+                        )}
+                      </div>
+                      <ExportMenu title={idea.title} content={idea.content} meta={new Date(idea.created).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})} />
+                      {idea.notebookPageId ? (
+                        <button onClick={()=>openNotebookPage(idea.notebookPageId)} title="Open Notebook Page" style={{padding:'4px 10px',borderRadius:8,background:`${C.accent}25`,border:`0.5px solid ${C.accent}`,color:C.accent,fontSize:10.5,cursor:'pointer',fontWeight:500}}>📓 Open Page</button>
+                      ) : (
+                        <button onClick={()=>setFolderPickerIdea(idea)} title="Save to Notebook" style={{padding:'4px 10px',borderRadius:8,background:`${C.pink}50`,border:`0.5px solid ${C.border}`,color:C.accent,fontSize:10.5,cursor:'pointer'}}>📓</button>
+                      )}
+                      {idea.taskId ? (
+                        <button onClick={()=>window._navigateTo&&window._navigateTo('tasks',"Today's Tasks")} title="View Task" style={{padding:'4px 10px',borderRadius:8,background:'#4285f425',border:'0.5px solid #4285f4',color:'#4285f4',fontSize:10.5,cursor:'pointer',fontWeight:500}}>✓ In Tasks</button>
+                      ) : (
+                        <button onClick={()=>convertToTask(idea)} title="Convert to Task" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>☑ To Task</button>
+                      )}
+                      {idea.calendarEventId ? (
+                        <button onClick={()=>window._navigateTo&&window._navigateTo('calendar','Monthly')} title="View on Calendar" style={{padding:'4px 10px',borderRadius:8,background:'#34a85325',border:'0.5px solid #34a853',color:'#34a853',fontSize:10.5,cursor:'pointer',fontWeight:500}}>📅 On Calendar</button>
+                      ) : (
+                        <button onClick={()=>setCalendarPromptId(idea.id)} title="Add to Calendar" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>📅 To Calendar</button>
+                      )}
+                      {idea.projectId ? (
+                        <button onClick={()=>window._navigateTo&&window._navigateTo('tasks','Projects')} title="View Project" style={{padding:'4px 10px',borderRadius:8,background:'#9080d825',border:'0.5px solid #9080d8',color:'#9080d8',fontSize:10.5,cursor:'pointer',fontWeight:500}}>📁 Project</button>
+                      ) : (
+                        <button onClick={()=>convertToProject(idea)} title="Convert to Project" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>📁 To Project</button>
+                      )}
+                      <button onClick={()=>sendToAgent(idea)} title="Send to Agent" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>🤖 Send to Agent</button>
+                      <select value={idea.category} onChange={e=>updateIdea(idea.id,'category',e.target.value)}
+                        style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
+                        {IDEA_CATEGORIES.filter(c=>c.key!=='all').map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+                      </select>
+                      <div style={{flex:1}}/>
+                      <button onClick={()=>remove(idea.id)} style={{padding:'4px 12px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>Delete</button>
+                    </div>
+                  </div>)}
                 </div>
               )}
             </div>
@@ -3044,6 +3567,7 @@ const IdeaBank = () => {
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 };
@@ -3061,6 +3585,18 @@ const NotebookPanel = ({ sub }) => {
   const [pages, setPages] = useState(()=>JSON.parse(localStorage.getItem(PK)||'[]'));
   const [activeFid, setActiveFid] = useState(()=>{ const f=DEFAULT_FOLDERS.find(f=>f.name===sub); return f?f.id:1; });
   const [activePid, setActivePid] = useState(null);
+
+  // Pick up an "open this page" request from elsewhere in the app (e.g. Idea Bank's Open Notebook Page button)
+  useEffect(() => {
+    const reqId = localStorage.getItem('nylaos_nb_open_request');
+    if (!reqId) return;
+    localStorage.removeItem('nylaos_nb_open_request');
+    const pg = pages.find(p=>p.id===Number(reqId));
+    if (pg) {
+      setActivePid(pg.id); setHeaderTitle(pg.name);
+      if (pg.folderId) { setActiveFid(pg.folderId); setExpandedFids(s=>new Set(s).add(pg.folderId)); }
+    }
+  }, []);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderParentId, setNewFolderParentId] = useState(null);
   const [showNewFolder, setShowNewFolder] = useState(false);
@@ -3096,15 +3632,41 @@ const NotebookPanel = ({ sub }) => {
 
   const saveFolders = f => { setFolders(f); localStorage.setItem(FK,JSON.stringify(f)); };
   const savePages   = p => { setPages(p);   localStorage.setItem(PK,JSON.stringify(p)); };
+  const NB_TRACKED_FIELDS = ['name','content'];
+  const lastSnapshotRef = useRef({});
   // Stale-closure-safe: always reads the latest pages from localStorage before updating
   const updateContent = html => {
     if(!activePid) return;
     setPages(prev => {
-      const updated = prev.map(p=>p.id===activePid?{...p,content:html,updated:new Date().toISOString()}:p);
+      const updated = prev.map(p=>{
+        if (p.id!==activePid) return p;
+        // Debounced: snapshot the pre-edit state at most once every 3 minutes per page,
+        // so version history captures meaningful checkpoints instead of one entry per keystroke.
+        const now = Date.now();
+        const last = lastSnapshotRef.current[p.id] || 0;
+        let versionHistory = p.versionHistory;
+        if (now - last > 3*60*1000) {
+          versionHistory = withVersionSnapshot(p, NB_TRACKED_FIELDS);
+          lastSnapshotRef.current[p.id] = now;
+        }
+        return {...p, content:html, updated:new Date().toISOString(), versionHistory};
+      });
       localStorage.setItem(PK,JSON.stringify(updated));
       return updated;
     });
   };
+  const restorePageVersion = (page, snap) => {
+    setPages(prev => {
+      const updated = prev.map(p=>p.id===page.id
+        ? {...p, name:snap.name, content:snap.content, updated:new Date().toISOString(), versionHistory:withVersionSnapshot(p, NB_TRACKED_FIELDS)}
+        : p);
+      localStorage.setItem(PK,JSON.stringify(updated));
+      return updated;
+    });
+    setHeaderTitle(snap.name);
+    toast('Version restored','success',1500);
+  };
+  const [showPageHistory, setShowPageHistory] = useState(false);
 
   const activePage = pages.find(p=>p.id===activePid);
   const stripHtml = h => (h||'').replace(/<[^>]+>/g,' ');
@@ -3801,6 +4363,17 @@ const NotebookPanel = ({ sub }) => {
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                 Page
               </button>
+              <ExportMenu title={activePage.name} content={activePage.content} meta={activePage.updated?new Date(activePage.updated).toLocaleString():''} />
+              <div style={{position:'relative'}}>
+                <button onClick={()=>setShowPageHistory(s=>!s)} title="Version History" style={{padding:'4px 11px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer',flexShrink:0}}>
+                  🕐{activePage.versionHistory?.length?` (${activePage.versionHistory.length})`:''}
+                </button>
+                {showPageHistory && (
+                  <VersionHistoryPanel entity={activePage} trackedFields={NB_TRACKED_FIELDS}
+                    onRestore={snap=>{restorePageVersion(activePage,snap);setShowPageHistory(false);}}
+                    onClose={()=>setShowPageHistory(false)} />
+                )}
+              </div>
               <button onClick={exportNotebookPDF} title="Print / Export entire notebook as PDF" style={{padding:'4px 11px',borderRadius:8,background:`${C.rose}18`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                 Notebook
@@ -4636,13 +5209,6 @@ const BusinessPlanEditor = ({ storageKey, title }) => {
     if(editorRef.current){ editorRef.current.focus(); saveContent(editorRef.current.innerHTML); }
   };
 
-  const exportPDF = () => {
-    const dateStr = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
-    const w = window.open('','_blank');
-    w.document.write(`<!DOCTYPE html><html><head><title>${title||'Business Plan'}</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:26px;color:#c4607a;}h2{font-size:20px;color:#a03c5a;}h3{font-size:16px;color:#c4607a;}</style></head><body><h1>${title||'Business Plan'}</h1><p style="font-size:11px;color:#aaa;">${dateStr}</p><hr style="border:none;border-top:1px solid #eee;margin:16px 0;"><div style="line-height:2;">${content||''}</div></body></html>`);
-    w.document.close(); w.print();
-  };
-
   const wc = content.replace(/<[^>]+>/g,' ').split(/\s+/).filter(Boolean).length;
   const panelBg = '#faf4f8';
 
@@ -4665,7 +5231,7 @@ const BusinessPlanEditor = ({ storageKey, title }) => {
       <div style={{padding:'9px 18px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:12,flexShrink:0,background:panelBg}}>
         <div style={{flex:1,fontSize:14,fontWeight:600,color:C.rose,fontFamily:"'DM Serif Display',serif"}}>{title||'Business Plan'}</div>
         <span style={{fontSize:10.5,color:C.textMuted}}>{wc} words</span>
-        <button onClick={exportPDF} style={{padding:'4px 12px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0}}>Export PDF</button>
+        <ExportMenu title={title||'Business Plan'} content={content} meta={new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} />
       </div>
       {/* Formatting toolbar */}
       <div style={{padding:'5px 10px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:2,flexWrap:'wrap',background:panelBg,flexShrink:0}}>
@@ -4951,9 +5517,14 @@ const NumerologyPanel = () => {
     </div>
   );
 
+  const numerologyReportText = `Core Numbers\nLife Path: ${LIFE_PATH}\nExpression: ${EXPRESSION}\nSoul Urge: ${SOUL_URGE}\nPersonality: ${PERSONALITY}\nBirthday: ${BIRTHDAY}\n\n`
+    + `Personal Year ${pYear} — ${PY_MEANINGS[pYear]||''}\n\nPersonal Month ${pMonth} — ${PM_MEANINGS[pMonth]||''}\n\nPersonal Day ${pDay} — ${PD_MEANINGS[pDay]||''}`;
   return (
     <div className="fade-in" style={{maxWidth:640,padding:'0 2px'}}>
-      <PageTitle>Numerology</PageTitle>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <PageTitle>Numerology</PageTitle>
+        <ExportMenu title="Numerology Report" content={numerologyReportText} csvData={[['Metric','Value'],['Life Path',LIFE_PATH],['Expression',EXPRESSION],['Soul Urge',SOUL_URGE],['Personality',PERSONALITY],['Birthday',BIRTHDAY],['Personal Year',pYear],['Personal Month',pMonth],['Personal Day',pDay]]} />
+      </div>
 
       {/* 5-number core grid */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:7,marginBottom:13}}>
@@ -5184,9 +5755,13 @@ const AstrologyPanel = () => {
 
   const EL_BADGE = {Fire:'#E0607070',Earth:'#60A87050',Air:'#C0A83050',Water:'#6080C050'};
 
+  const astrologyReportText = `${season} Season — ${SEASON_DESC[season]||''}\n\n` + CHART_PLACEMENTS.map(p=>`${p.planet} in ${p.sign} (${p.element}, ruled by ${p.ruling})\n${p.desc}`).join('\n\n');
   return (
     <div className="fade-in" style={{maxWidth:680,padding:'0 2px'}}>
-      <PageTitle>Astrology</PageTitle>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <PageTitle>Astrology</PageTitle>
+        <ExportMenu title="Astrology Report" content={astrologyReportText} csvData={[['Planet','Sign','Element','Ruling'],...CHART_PLACEMENTS.map(p=>[p.planet,p.sign,p.element,p.ruling])]} />
+      </div>
 
       {/* Chart wheel + season side-by-side */}
       <div style={{display:'flex',gap:12,marginBottom:12,alignItems:'flex-start',flexWrap:'wrap'}}>
@@ -5286,9 +5861,17 @@ const MatrixOfDestinyPanel = () => {
     );
   };
 
+  const MATRIX_POSITIONS = [
+    {n:1, pos:'Karma Center'}, {n:5, pos:'Sky & Earth'}, {n:11, pos:'Past'},
+    {n:7, pos:'Future'}, {n:16, pos:'Portal E & G'}, {n:12, pos:'Portal F & H'},
+  ];
+  const matrixReportText = MATRIX_POSITIONS.map(({n,pos})=>`${pos}: Arcana ${n} — ${ARCANA[n]?.name} (${ARCANA[n]?.theme})`).join('\n');
   return (
     <div className="fade-in" style={{maxWidth:640,padding:'0 2px'}}>
-      <PageTitle>Matrix of Destiny</PageTitle>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <PageTitle>Matrix of Destiny</PageTitle>
+        <ExportMenu title="Matrix of Destiny Report" content={matrixReportText} csvData={[['Position','Arcana','Name','Theme'],...MATRIX_POSITIONS.map(({n,pos})=>[pos,n,ARCANA[n]?.name||'',ARCANA[n]?.theme||''])]} />
+      </div>
       <div style={{fontSize:11,color:C.textMuted,marginBottom:14,lineHeight:1.6}}>The Matrix of Destiny (Матрица Судьбы) is a Russian esoteric system based on Major Arcana numerology derived from your birth date. Each position in the matrix reveals a specific energy — karma, talents, destiny, and the forces shaping your path.</div>
 
       {/* Visual Matrix Diamond */}
@@ -5361,22 +5944,6 @@ const MatrixOfDestinyPanel = () => {
 const CosmicPanel = ({ sub }) => {
   const key = `nylaos_cosmic_${sub}`;
   const [content, setContent] = useState(()=>localStorage.getItem(key)||'');
-  const moon = getMoonForDate(new Date());
-  if (sub==='Moon Phase') return (
-    <div className="fade-in" style={{ maxWidth:500 }}>
-      <PageTitle>Moon Phase</PageTitle>
-      <Card style={{ background:C.gradNight, border:`0.5px solid #3a1660`, padding:'40px 30px', textAlign:'center', marginBottom:14 }}>
-        <div style={{ fontSize:88, marginBottom:16, filter:'drop-shadow(0 0 20px #9050ff50)' }}>{moon.emoji}</div>
-        <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:22, color:'#E8D0F5', marginBottom:8 }}>{moon.label}</div>
-        <div style={{ fontSize:13, color:'#8060B0' }}>{new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
-      </Card>
-      <Card style={{ background:`${C.lavender}60` }}>
-        <SectionHeading>Lunar Intentions</SectionHeading>
-        <TextArea value={content} height={120} placeholder={`Set your intentions for the ${moon.label}...`}
-          onChange={e=>{setContent(e.target.value);localStorage.setItem(key,e.target.value);}} />
-      </Card>
-    </div>
-  );
   if (sub==='Numerology')         return <NumerologyPanel />;
   if (sub==='Astrology')          return <AstrologyPanel />;
   if (sub==='Matrix of Destiny')  return <MatrixOfDestinyPanel />;
@@ -5606,11 +6173,16 @@ const GoalsPanel = ({ sub }) => {
     );
   };
 
+  const goalsReportText = filtered.map(g=>`${g.title} — ${g.progress}%${g.category?` (${g.category})`:''}${g.description?`\n${g.description}`:''}`).join('\n\n');
+
   return (
     <div className="fade-in" style={{ maxWidth:700 }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
         <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:21, color:C.rose }}>Goals</div>
-        <button onClick={()=>{ setShowForm(s=>!s); setEditId(null); setForm(blankForm()); }} style={{ padding:'8px 18px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13, fontWeight:500, cursor:'pointer' }}>+ New Goal</button>
+        <div style={{display:'flex',gap:8}}>
+          {total>0 && <ExportMenu title={`${sub} Goals Report`} content={goalsReportText} csvData={[['Title','Progress %','Category'],...filtered.map(g=>[g.title,g.progress,g.category||''])]} />}
+          <button onClick={()=>{ setShowForm(s=>!s); setEditId(null); setForm(blankForm()); }} style={{ padding:'8px 18px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13, fontWeight:500, cursor:'pointer' }}>+ New Goal</button>
+        </div>
       </div>
 
       <PeriodSelector />
@@ -5738,6 +6310,11 @@ const CourseList = () => {
     save([...courses,{id:Date.now(),...form,credits:parseInt(form.credits)||3}]);
     setForm({code:'',name:'',credits:'3',grade:'A',semester:''});
   };
+  const remove = id => {
+    const c = courses.find(x=>x.id===id);
+    if (c) addToTrash('course', c.name, c, key);
+    save(courses.filter(x=>x.id!==id));
+  };
   return (
     <div className="fade-in" style={{ maxWidth:700 }}>
       <PageTitle>Courses</PageTitle>
@@ -5768,7 +6345,7 @@ const CourseList = () => {
               <div style={{ fontSize:14, fontWeight:500, color:C.rose }}>{c.name}</div>
               <div style={{ fontSize:12, color:C.textLight }}>{c.code}{c.semester?` · ${c.semester}`:''} · {c.credits} credits</div>
             </div>
-            <button onClick={()=>save(courses.filter(x=>x.id!==c.id))} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:18, opacity:0.6 }}>×</button>
+            <button onClick={()=>remove(c.id)} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:18, opacity:0.6 }}>×</button>
           </Card>
         ))
       }
@@ -5789,12 +6366,21 @@ const AssignmentTracker = () => {
     setForm({title:'',course:'',dueDate:'',priority:'medium',status:'pending'});
   };
   const toggle = id => save(assignments.map(a=>a.id===id?{...a,status:a.status==='completed'?'pending':'completed'}:a));
+  const remove = id => {
+    const a = assignments.find(x=>x.id===id);
+    if (a) addToTrash('assignment', a.title, a, key);
+    save(assignments.filter(x=>x.id!==id));
+  };
   const priorityColor = p => p==='high'?C.rose:p==='medium'?'#F4A261':'#4CAF77';
   const upcoming = assignments.filter(a=>a.status!=='completed').sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate));
   const done = assignments.filter(a=>a.status==='completed');
+  const assignmentsReportText = [...upcoming,...done].map(a=>`${a.title} — ${a.course||'No course'}${a.dueDate?` — due ${a.dueDate}`:''} (${a.status})`).join('\n');
   return (
     <div className="fade-in" style={{ maxWidth:680 }}>
-      <PageTitle>Assignments</PageTitle>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <PageTitle>Assignments</PageTitle>
+        {assignments.length>0 && <ExportMenu title="Assignments Report" content={assignmentsReportText} csvData={[['Title','Course','Due Date','Status'],...[...upcoming,...done].map(a=>[a.title,a.course||'',a.dueDate||'',a.status])]} />}
+      </div>
       <Card style={{ marginBottom:16, padding:'14px 16px' }}>
         <SectionHeading>Add Assignment</SectionHeading>
         <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
@@ -5833,7 +6419,7 @@ const AssignmentTracker = () => {
               </div>
             </div>
             <div style={{ width:8, height:8, borderRadius:'50%', background:priorityColor(a.priority), flexShrink:0 }}/>
-            <button onClick={()=>save(assignments.filter(x=>x.id!==a.id))} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:18, opacity:0.6 }}>×</button>
+            <button onClick={()=>remove(a.id)} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:18, opacity:0.6 }}>×</button>
           </Card>
         );
       })}
@@ -5844,7 +6430,7 @@ const AssignmentTracker = () => {
             <Card key={a.id} style={{ marginBottom:6, padding:'10px 16px', display:'flex', alignItems:'center', gap:12, opacity:0.7 }}>
               <Checkbox checked={true} onChange={()=>toggle(a.id)} />
               <span style={{ flex:1, fontSize:13, color:C.textMuted, textDecoration:'line-through' }}>{a.title}</span>
-              <button onClick={()=>save(assignments.filter(x=>x.id!==a.id))} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:18, opacity:0.6 }}>×</button>
+              <button onClick={()=>remove(a.id)} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, fontSize:18, opacity:0.6 }}>×</button>
             </Card>
           ))}
         </div>
@@ -5868,9 +6454,13 @@ const GPACalculator = () => {
   const totalPoints = validEntries.reduce((s,e)=>s+e.points*e.credits,0);
   const gpa = totalCredits>0 ? (totalPoints/totalCredits).toFixed(2) : '—';
   const gpaColor = parseFloat(gpa)>=3.7?'#4CAF77':parseFloat(gpa)>=3.0?C.accent:C.rose;
+  const gpaReportText = `Cumulative GPA: ${gpa} (${totalCredits} credit hours)\n\n` + entries.map(e=>`${e.course} — ${e.grade} (${e.credits} cr)`).join('\n');
   return (
     <div className="fade-in" style={{ maxWidth:580 }}>
-      <PageTitle>GPA Calculator</PageTitle>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <PageTitle>GPA Calculator</PageTitle>
+        {entries.length>0 && <ExportMenu title="GPA Report" content={gpaReportText} csvData={[['Course','Grade','Credits'],...entries.map(e=>[e.course,e.grade,e.credits])]} />}
+      </div>
       <Card style={{ textAlign:'center', marginBottom:16, background:C.gradA, padding:'24px' }}>
         <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:48, color:gpaColor, fontWeight:600 }}>{gpa}</div>
         <div style={{ fontSize:13, color:C.textLight, marginTop:4 }}>Cumulative GPA · {totalCredits} credit hours</div>
@@ -5906,28 +6496,445 @@ const GPACalculator = () => {
   );
 };
 
+/* ── Syllabus Upload / Extraction Pipeline ──────────────────────── */
+const SYLLABUS_EXTRACT_SYSTEM = `You extract structured data from a college syllabus. Reply with ONLY a single JSON object, no markdown fences, no commentary, matching exactly this shape (use "" or [] for anything not present in the text — never invent information):
+{
+  "courseName": "", "courseCode": "", "instructor": "", "instructorEmail": "", "officeHours": "",
+  "location": "", "semester": "", "creditHours": 3,
+  "schedule": [{"days": "e.g. Mon/Wed/Fri", "time": "e.g. 10:00 AM–10:50 AM"}],
+  "textbooks": [""],
+  "assignments": [{"title": "", "dueDate": "YYYY-MM-DD or ''"}],
+  "exams": [{"title": "", "date": "YYYY-MM-DD or ''"}],
+  "attendancePolicy": "", "lateWorkPolicy": "", "rules": ""
+}`;
+
+const parseSyllabusText = async text => {
+  const key = localStorage.getItem('nylaos_api_key');
+  if(!key) throw new Error('Add your API key in Settings → API Keys first');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body:JSON.stringify({model:'claude-sonnet-4-5', max_tokens:2000, system:SYLLABUS_EXTRACT_SYSTEM, messages:[{role:'user', content:text}]}),
+  });
+  const data = await res.json();
+  const raw = data.content?.[0]?.text || '{}';
+  const jsonStr = raw.match(/\{[\s\S]*\}/)?.[0] || '{}';
+  return JSON.parse(jsonStr);
+};
+
+const SyllabusUploader = () => {
+  const [step, setStep] = useState('input'); // input | extracting | review | done
+  const [pastedText, setPastedText] = useState('');
+  const [extracted, setExtracted] = useState(null);
+  const [semesterStart, setSemesterStart] = useState('');
+  const [semesterEnd, setSemesterEnd] = useState('');
+  const [error, setError] = useState('');
+  const [createdSummary, setCreatedSummary] = useState(null);
+  const fileRef = useRef(null);
+
+  const handleFile = file => {
+    if(!file.name.match(/\.(txt|md)$/i)){ setError('Only pasted text or .txt files are supported right now — PDF/DOCX/image/Google Drive/Canvas import need OCR or file-parsing support that isn\'t built yet.'); return; }
+    const reader = new FileReader();
+    reader.onload = e => setPastedText(e.target.result);
+    reader.readAsText(file);
+  };
+
+  const extract = async () => {
+    if(!pastedText.trim()) return;
+    setStep('extracting'); setError('');
+    try {
+      const data = await parseSyllabusText(pastedText);
+      setExtracted(data);
+      const now = new Date();
+      setSemesterStart(now.toISOString().slice(0,10));
+      const end = new Date(now); end.setMonth(end.getMonth()+4);
+      setSemesterEnd(end.toISOString().slice(0,10));
+      setStep('review');
+    } catch(e) {
+      setError(e.message || 'Could not extract this syllabus — try again.');
+      setStep('input');
+    }
+  };
+
+  const updateField = (field, val) => setExtracted(e=>({...e, [field]:val}));
+  const updateListItem = (listField, i, key, val) => setExtracted(e=>({...e, [listField]: e[listField].map((item,idx)=>idx===i?{...item,[key]:val}:item)}));
+  const removeListItem = (listField, i) => setExtracted(e=>({...e, [listField]: e[listField].filter((_,idx)=>idx!==i)}));
+
+  const approve = () => {
+    const created = { course:null, events:0, assignments:0, notebookPageId:null };
+    // 1. Course
+    const coursesKey='nylaos_courses';
+    const courses = JSON.parse(localStorage.getItem(coursesKey)||'[]');
+    const courseId = Date.now();
+    const course = {
+      id:courseId, code:extracted.courseCode||'', name:extracted.courseName||'Untitled Course', credits:parseInt(extracted.creditHours)||3, grade:'A',
+      semester:extracted.semester||'', instructor:extracted.instructor||'', instructorEmail:extracted.instructorEmail||'', officeHours:extracted.officeHours||'',
+      location:extracted.location||'', textbooks:extracted.textbooks||[], attendancePolicy:extracted.attendancePolicy||'', lateWorkPolicy:extracted.lateWorkPolicy||'',
+      semesterStart, semesterEnd, created:new Date().toISOString(),
+    };
+    courses.push(course);
+    localStorage.setItem(coursesKey, JSON.stringify(courses));
+    created.course = JSON.parse(localStorage.getItem(coursesKey)||'[]').some(c=>c.id===courseId) ? course : null;
+
+    // 2. Recurring class meetings on the calendar, one event series per schedule row
+    const eventsKey='nylaos_events';
+    let events = JSON.parse(localStorage.getItem(eventsKey)||'[]');
+    (extracted.schedule||[]).forEach(row=>{
+      const dayMap = {mon:1,tue:2,wed:3,thu:4,fri:5,sat:6,sun:0};
+      const dayTokens = (row.days||'').toLowerCase().match(/mon|tue|wed|thu|fri|sat|sun/g) || [];
+      const start = new Date(semesterStart+'T00:00:00'), end = new Date(semesterEnd+'T00:00:00');
+      const groupId = Date.now()+Math.floor(Math.random()*1000);
+      let n=0;
+      for(let d=new Date(start); d<=end; d.setDate(d.getDate()+1)){
+        if(dayTokens.some(t=>dayMap[t]===d.getDay())){
+          const dateStr=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          events.push({id:groupId+n, date:dateStr, text:`${extracted.courseName}${row.time?` (${row.time})`:''}`, recurringGroupId:groupId, courseId});
+          n++;
+        }
+      }
+      created.events += n;
+    });
+    // 3. Assignments + exams, each also gets a calendar reminder on its due date
+    const assignKey='nylaos_assignments';
+    const assignments = JSON.parse(localStorage.getItem(assignKey)||'[]');
+    [...(extracted.assignments||[]).map(a=>({...a,kind:'Assignment'})), ...(extracted.exams||[]).map(a=>({title:a.title,dueDate:a.date,kind:'Exam'}))].forEach(item=>{
+      if(!item.title) return;
+      const id=Date.now()+Math.floor(Math.random()*10000);
+      assignments.push({id, title:`${item.kind==='Exam'?'📝 ':''}${item.title}`, course:extracted.courseCode||extracted.courseName, dueDate:item.dueDate||'', priority: item.kind==='Exam'?'high':'medium', status:'pending'});
+      if(item.dueDate) events.push({id:id+1, date:item.dueDate, text:`${item.kind}: ${item.title} (${extracted.courseName})`});
+      created.assignments++;
+    });
+    localStorage.setItem(eventsKey, JSON.stringify(events));
+    localStorage.setItem(assignKey, JSON.stringify(assignments));
+
+    // 4. Course notebook page with the original syllabus + a suggested study plan
+    const foldersKey='nylaos_nb_folders';
+    let folders = JSON.parse(localStorage.getItem(foldersKey)||'[]');
+    if(folders.length===0) folders=[{id:1,name:'All Notes',icon:'📝',parentId:null},{id:2,name:'Journal',icon:'📖',parentId:null},{id:3,name:'Ideas',icon:'💡',parentId:null},{id:4,name:'Bookmarks',icon:'🔖',parentId:null}];
+    let coursesFolder = folders.find(f=>f.name==='Courses');
+    if(!coursesFolder){ coursesFolder={id:Date.now(), name:'Courses', icon:'🎓', parentId:null}; folders.push(coursesFolder); localStorage.setItem(foldersKey, JSON.stringify(folders)); }
+    const pagesKey='nylaos_nb_pages';
+    const pages = JSON.parse(localStorage.getItem(pagesKey)||'[]');
+    const pageId = Date.now()+1;
+    const studyPlan = `Review ${extracted.courseName} material weekly rather than cramming before exams. Prioritize assignments due within the next 7 days, and revisit lecture notes within 48 hours of class while they're fresh.`;
+    const content = `<h2>${extracted.courseName} — Course Notebook</h2>`
+      + `<p><strong>Instructor:</strong> ${extracted.instructor||'—'} ${extracted.instructorEmail?`(${extracted.instructorEmail})`:''}</p>`
+      + `<p><strong>Office Hours:</strong> ${extracted.officeHours||'—'}</p>`
+      + `<p><strong>Location:</strong> ${extracted.location||'—'}</p>`
+      + `<h3>Suggested Study Plan</h3><p>${studyPlan}</p>`
+      + `<h3>Attendance Policy</h3><p>${extracted.attendancePolicy||'—'}</p>`
+      + `<h3>Late Work Policy</h3><p>${extracted.lateWorkPolicy||'—'}</p>`
+      + `<h3>Original Syllabus (pasted text)</h3><p style="white-space:pre-wrap;">${pastedText.replace(/</g,'&lt;')}</p>`;
+    pages.push({id:pageId, name:`${extracted.courseName} — Syllabus`, folderId:coursesFolder.id, content, created:new Date().toISOString(), updated:new Date().toISOString(), courseId});
+    localStorage.setItem(pagesKey, JSON.stringify(pages));
+    created.notebookPageId = JSON.parse(localStorage.getItem(pagesKey)||'[]').some(p=>p.id===pageId) ? pageId : null;
+
+    setCreatedSummary(created);
+    setStep('done');
+  };
+
+  if(step==='done' && createdSummary) return (
+    <div className="fade-in" style={{maxWidth:600}}>
+      <PageTitle>Syllabus Processed ✓</PageTitle>
+      <Card style={{padding:'16px 18px'}}>
+        <div style={{fontSize:13,color:C.text,lineHeight:2}}>
+          {createdSummary.course && <div>✅ Created course: <strong>{createdSummary.course.name}</strong></div>}
+          <div>✅ Added {createdSummary.events} class/exam calendar events</div>
+          <div>✅ Added {createdSummary.assignments} assignments/exams to your tracker</div>
+          {createdSummary.notebookPageId && <div>✅ Created a course Notebook page with the syllabus and a suggested study plan</div>}
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:14}}>
+          <button onClick={()=>window._navigateTo&&window._navigateTo('university','Courses')} style={{padding:'8px 16px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:12.5,cursor:'pointer'}}>View Courses</button>
+          <button onClick={()=>window._navigateTo&&window._navigateTo('calendar','Monthly')} style={{padding:'8px 16px',borderRadius:10,background:'transparent',border:`0.5px solid ${C.border}`,color:C.text,fontSize:12.5,cursor:'pointer'}}>View Calendar</button>
+          {createdSummary.notebookPageId && <button onClick={()=>{localStorage.setItem('nylaos_nb_open_request',String(createdSummary.notebookPageId));window._navigateTo&&window._navigateTo('notebook','Courses');}} style={{padding:'8px 16px',borderRadius:10,background:'transparent',border:`0.5px solid ${C.border}`,color:C.text,fontSize:12.5,cursor:'pointer'}}>View Notebook Page</button>}
+        </div>
+        <button onClick={()=>{setStep('input');setPastedText('');setExtracted(null);setCreatedSummary(null);}} style={{marginTop:12,background:'none',border:'none',color:C.textMuted,fontSize:12,cursor:'pointer',textDecoration:'underline'}}>Process another syllabus</button>
+      </Card>
+    </div>
+  );
+
+  if(step==='review' && extracted) return (
+    <div className="fade-in" style={{maxWidth:660}}>
+      <PageTitle>Review Before Creating</PageTitle>
+      <Card style={{padding:'16px 18px',marginBottom:14}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}}>
+          <LabeledInput label="Course name" value={extracted.courseName} onChange={v=>updateField('courseName',v)}/>
+          <LabeledInput label="Course code" value={extracted.courseCode} onChange={v=>updateField('courseCode',v)}/>
+          <LabeledInput label="Instructor" value={extracted.instructor} onChange={v=>updateField('instructor',v)}/>
+          <LabeledInput label="Instructor email" value={extracted.instructorEmail} onChange={v=>updateField('instructorEmail',v)}/>
+          <LabeledInput label="Office hours" value={extracted.officeHours} onChange={v=>updateField('officeHours',v)}/>
+          <LabeledInput label="Location" value={extracted.location} onChange={v=>updateField('location',v)}/>
+          <LabeledInput label="Semester" value={extracted.semester} onChange={v=>updateField('semester',v)}/>
+          <LabeledInput label="Credit hours" value={extracted.creditHours} onChange={v=>updateField('creditHours',v)}/>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:4}}>
+          <div>
+            <div style={{fontSize:10.5,color:C.textMuted,marginBottom:3}}>Semester start (for recurring classes)</div>
+            <input type="date" value={semesterStart} onChange={e=>setSemesterStart(e.target.value)} style={{width:'100%',padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10.5,color:C.textMuted,marginBottom:3}}>Semester end</div>
+            <input type="date" value={semesterEnd} onChange={e=>setSemesterEnd(e.target.value)} style={{width:'100%',padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+          </div>
+        </div>
+      </Card>
+
+      <Card style={{padding:'16px 18px',marginBottom:14}}>
+        <SectionHeading>Class Schedule</SectionHeading>
+        {(extracted.schedule||[]).length===0 && <div style={{fontSize:12,color:C.textMuted,fontStyle:'italic'}}>No recurring meeting times detected — you can add them manually after.</div>}
+        {(extracted.schedule||[]).map((row,i)=>(
+          <div key={i} style={{display:'flex',gap:6,marginBottom:6,alignItems:'center'}}>
+            <input value={row.days||''} onChange={e=>updateListItem('schedule',i,'days',e.target.value)} placeholder="Days (e.g. Mon/Wed/Fri)" style={{flex:1,padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+            <input value={row.time||''} onChange={e=>updateListItem('schedule',i,'time',e.target.value)} placeholder="Time" style={{flex:1,padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+            <button onClick={()=>removeListItem('schedule',i)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14}}>×</button>
+          </div>
+        ))}
+      </Card>
+
+      <Card style={{padding:'16px 18px',marginBottom:14}}>
+        <SectionHeading>Assignments & Exams ({(extracted.assignments||[]).length + (extracted.exams||[]).length})</SectionHeading>
+        {(extracted.assignments||[]).map((a,i)=>(
+          <div key={'a'+i} style={{display:'flex',gap:6,marginBottom:6,alignItems:'center'}}>
+            <input value={a.title||''} onChange={e=>updateListItem('assignments',i,'title',e.target.value)} placeholder="Assignment title" style={{flex:2,padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+            <input type="date" value={a.dueDate||''} onChange={e=>updateListItem('assignments',i,'dueDate',e.target.value)} style={{flex:1,padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+            <button onClick={()=>removeListItem('assignments',i)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14}}>×</button>
+          </div>
+        ))}
+        {(extracted.exams||[]).map((a,i)=>(
+          <div key={'e'+i} style={{display:'flex',gap:6,marginBottom:6,alignItems:'center'}}>
+            <input value={a.title||''} onChange={e=>updateListItem('exams',i,'title',e.target.value)} placeholder="Exam title" style={{flex:2,padding:'6px 9px',borderRadius:8,border:`0.5px solid #F4A261`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+            <input type="date" value={a.date||''} onChange={e=>updateListItem('exams',i,'date',e.target.value)} style={{flex:1,padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+            <button onClick={()=>removeListItem('exams',i)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14}}>×</button>
+          </div>
+        ))}
+      </Card>
+
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={approve} style={{padding:'9px 20px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,fontWeight:500,cursor:'pointer'}}>Approve & Create Everything</button>
+        <button onClick={()=>{setStep('input');setExtracted(null);}} style={{padding:'9px 16px',borderRadius:10,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:13,cursor:'pointer'}}>Start Over</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="fade-in" style={{maxWidth:600}}>
+      <PageTitle>Upload Syllabus</PageTitle>
+      <Card style={{padding:'16px 18px',marginBottom:14}}>
+        <div style={{fontSize:12.5,color:C.textLight,marginBottom:10,lineHeight:1.6}}>
+          Paste your syllabus text below, or upload a .txt file. <strong>PDF, DOCX, image, Google Drive file, and Canvas export</strong> aren't supported yet — those need file-parsing/OCR support this app doesn't have built in.
+        </div>
+        <textarea value={pastedText} onChange={e=>setPastedText(e.target.value)} placeholder="Paste the full syllabus text here..."
+          style={{width:'100%',height:180,padding:'10px 12px',borderRadius:10,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12.5,fontFamily:'inherit',resize:'vertical',marginBottom:10}}/>
+        {error && <div style={{fontSize:12,color:'#e57373',marginBottom:10}}>{error}</div>}
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={extract} disabled={!pastedText.trim()||step==='extracting'} style={{padding:'9px 20px',borderRadius:10,background:pastedText.trim()?C.rose:C.textMuted,color:'#fff',border:'none',fontSize:13,fontWeight:500,cursor:pastedText.trim()?'pointer':'not-allowed'}}>
+            {step==='extracting'?'Extracting…':'Extract Syllabus Info'}
+          </button>
+          <button onClick={()=>fileRef.current?.click()} style={{padding:'9px 16px',borderRadius:10,background:'transparent',border:`0.5px solid ${C.border}`,color:C.text,fontSize:13,cursor:'pointer'}}>📁 Upload .txt file</button>
+          <input ref={fileRef} type="file" accept=".txt,.md" hidden onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const LabeledInput = ({label, value, onChange}) => (
+  <div>
+    <div style={{fontSize:10.5,color:C.textMuted,marginBottom:3}}>{label}</div>
+    <input value={value||''} onChange={e=>onChange(e.target.value)} style={{width:'100%',padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit'}}/>
+  </div>
+);
+
+const UniversityDashboard = () => {
+  const courses = JSON.parse(localStorage.getItem('nylaos_courses')||'[]');
+  const assignments = JSON.parse(localStorage.getItem('nylaos_assignments')||'[]');
+  const gpaEntries = JSON.parse(localStorage.getItem('nylaos_gpa_entries')||'[]');
+  const [targetCredits, setTargetCredits] = useState(()=>parseInt(localStorage.getItem('nylaos_credit_target')||'120'));
+  const [studyHours, setStudyHours] = useState(()=>JSON.parse(localStorage.getItem('nylaos_study_hours')||'{}'));
+  const [attendance, setAttendance] = useState(()=>JSON.parse(localStorage.getItem('nylaos_attendance')||'{}'));
+
+  const weekKey = (()=>{ const d=new Date(); const onejan=new Date(d.getFullYear(),0,1); const week=Math.ceil((((d-onejan)/86400000)+onejan.getDay()+1)/7); return `${d.getFullYear()}-W${week}`; })();
+  const logStudyHours = h => { const updated={...studyHours,[weekKey]:parseFloat(h)||0}; setStudyHours(updated); localStorage.setItem('nylaos_study_hours',JSON.stringify(updated)); };
+  const setCreditTarget = v => { setTargetCredits(v); localStorage.setItem('nylaos_credit_target',String(v)); };
+  const markAttendance = (courseId, present) => {
+    const cur = attendance[courseId]||{present:0,absent:0};
+    const updated = {...attendance, [courseId]: {...cur, [present?'present':'absent']: cur[present?'present':'absent']+1}};
+    setAttendance(updated); localStorage.setItem('nylaos_attendance', JSON.stringify(updated));
+  };
+
+  const validEntries = gpaEntries.filter(e=>e.points!=null);
+  const totalCredits = validEntries.reduce((s,e)=>s+e.credits,0);
+  const totalPoints = validEntries.reduce((s,e)=>s+e.points*e.credits,0);
+  const gpa = totalCredits>0 ? (totalPoints/totalCredits) : null;
+  const courseGradePoints = courses.filter(c=>c.grade&&GRADE_POINTS[c.grade]!=null).reduce((s,c)=>s+GRADE_POINTS[c.grade]*(c.credits||3),0);
+  const courseCredits = courses.reduce((s,c)=>s+(c.credits||3),0);
+  const projTotalCredits = totalCredits+courseCredits, projTotalPoints = totalPoints+courseGradePoints;
+  const projectedGpa = projTotalCredits>0 ? (projTotalPoints/projTotalCredits) : null;
+  const creditsEarned = totalCredits+courseCredits;
+
+  const upcoming = assignments.filter(a=>a.status!=='completed'&&a.dueDate).sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate));
+  const next7 = upcoming.filter(a=>{ const days=(new Date(a.dueDate+'T23:59:59')-new Date())/86400000; return days>=0 && days<=7; });
+  const overdue = upcoming.filter(a=>new Date(a.dueDate+'T23:59:59')<new Date());
+  const dueDateCounts = {}; upcoming.forEach(a=>{ dueDateCounts[a.dueDate]=(dueDateCounts[a.dueDate]||0)+1; });
+  const conflictDates = Object.entries(dueDateCounts).filter(([,c])=>c>1);
+
+  const latestEnd = courses.map(c=>c.semesterEnd).filter(Boolean).sort().pop();
+  const daysToSemesterEnd = latestEnd ? Math.ceil((new Date(latestEnd+'T00:00:00')-new Date())/86400000) : null;
+
+  const StatCard = ({label, value, sub, color}) => (
+    <Card style={{padding:'14px 16px',flex:1,minWidth:130}}>
+      <div style={{fontSize:22,fontWeight:600,color:color||C.rose,fontFamily:"'DM Serif Display',serif"}}>{value}</div>
+      <div style={{fontSize:11,color:C.textLight,marginTop:2}}>{label}</div>
+      {sub && <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{sub}</div>}
+    </Card>
+  );
+
+  return (
+    <div className="fade-in" style={{maxWidth:820}}>
+      <PageTitle>University Dashboard</PageTitle>
+
+      <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:14}}>
+        <StatCard label="Current GPA" value={gpa?gpa.toFixed(2):'—'} sub={`${totalCredits} credits completed`}/>
+        <StatCard label="Projected GPA" value={projectedGpa?projectedGpa.toFixed(2):'—'} sub="Including in-progress courses" color={C.accent}/>
+        <StatCard label="Credit Progress" value={`${creditsEarned}/${targetCredits}`} sub={`${Math.min(100,Math.round(creditsEarned/targetCredits*100))}% to graduation`}/>
+        <StatCard label="Semester Countdown" value={daysToSemesterEnd!=null?`${daysToSemesterEnd}d`:'—'} sub={latestEnd?`Ends ${latestEnd}`:'Add a course with a semester end date'}/>
+      </div>
+
+      {(overdue.length>0 || next7.length>3 || conflictDates.length>0 || (gpa!=null && gpa<2.5)) && (
+        <Card style={{padding:'14px 16px',marginBottom:14,background:'#F4A26118',border:'0.5px solid #F4A261'}}>
+          <div style={{fontSize:12.5,fontWeight:600,color:'#c4763d',marginBottom:6}}>⚠ Alerts</div>
+          {overdue.length>0 && <div style={{fontSize:12,color:C.text,marginBottom:3}}>· {overdue.length} overdue assignment{overdue.length>1?'s':''}</div>}
+          {next7.length>3 && <div style={{fontSize:12,color:C.text,marginBottom:3}}>· Workload alert: {next7.length} items due in the next 7 days</div>}
+          {conflictDates.length>0 && <div style={{fontSize:12,color:C.text,marginBottom:3}}>· Deadline conflict: {conflictDates.map(([d,c])=>`${c} items due ${d}`).join(', ')}</div>}
+          {gpa!=null && gpa<2.5 && <div style={{fontSize:12,color:C.text}}>· Academic risk: current GPA is below 2.5</div>}
+        </Card>
+      )}
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:14}}>
+        <Card style={{padding:'14px 16px'}}>
+          <SectionHeading>Upcoming Assignments</SectionHeading>
+          {upcoming.length===0 && <div style={{fontSize:12,color:C.textMuted,fontStyle:'italic'}}>Nothing due — you're clear.</div>}
+          {upcoming.slice(0,5).map(a=>(
+            <div key={a.id} style={{fontSize:12,color:C.text,padding:'4px 0',borderBottom:`0.5px solid ${C.border}60`}}>
+              {a.title} <span style={{color:C.textMuted}}>— {a.course} · {a.dueDate}</span>
+            </div>
+          ))}
+        </Card>
+        <Card style={{padding:'14px 16px'}}>
+          <SectionHeading>Professor Contacts</SectionHeading>
+          {courses.length===0 && <div style={{fontSize:12,color:C.textMuted,fontStyle:'italic'}}>No courses yet.</div>}
+          {courses.map(c=>(
+            <div key={c.id} style={{fontSize:12,color:C.text,padding:'4px 0',borderBottom:`0.5px solid ${C.border}60`}}>
+              <strong>{c.name}</strong>{c.instructor?` — ${c.instructor}`:''}{c.instructorEmail?` (${c.instructorEmail})`:''}
+              {c.officeHours && <div style={{fontSize:10.5,color:C.textMuted}}>Office hours: {c.officeHours}</div>}
+            </div>
+          ))}
+        </Card>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+        <Card style={{padding:'14px 16px'}}>
+          <SectionHeading>Weekly Study Hours</SectionHeading>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="number" defaultValue={studyHours[weekKey]||''} onBlur={e=>logStudyHours(e.target.value)} placeholder="Hours this week"
+              style={{width:120,padding:'6px 9px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12}}/>
+            <span style={{fontSize:11,color:C.textMuted}}>logged for {weekKey}</span>
+          </div>
+        </Card>
+        <Card style={{padding:'14px 16px'}}>
+          <SectionHeading>Attendance</SectionHeading>
+          {courses.length===0 && <div style={{fontSize:12,color:C.textMuted,fontStyle:'italic'}}>No courses yet.</div>}
+          {courses.map(c=>{
+            const att = attendance[c.id]||{present:0,absent:0};
+            const pct = (att.present+att.absent)>0 ? Math.round(att.present/(att.present+att.absent)*100) : null;
+            return (
+              <div key={c.id} style={{display:'flex',alignItems:'center',gap:8,padding:'4px 0'}}>
+                <span style={{flex:1,fontSize:12,color:C.text}}>{c.name} {pct!=null&&<span style={{color:C.textMuted}}>({pct}%)</span>}</span>
+                <button onClick={()=>markAttendance(c.id,true)} style={{padding:'2px 8px',borderRadius:6,background:'#4CAF7725',border:'none',color:'#4CAF77',fontSize:10.5,cursor:'pointer'}}>Present</button>
+                <button onClick={()=>markAttendance(c.id,false)} style={{padding:'2px 8px',borderRadius:6,background:'#e5737325',border:'none',color:'#e57373',fontSize:10.5,cursor:'pointer'}}>Absent</button>
+              </div>
+            );
+          })}
+        </Card>
+      </div>
+
+      <div style={{marginTop:14,fontSize:11,color:C.textMuted}}>
+        Graduation credit target: <input type="number" defaultValue={targetCredits} onBlur={e=>setCreditTarget(parseInt(e.target.value)||120)} style={{width:60,padding:'2px 6px',borderRadius:6,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:11}}/>
+      </div>
+    </div>
+  );
+};
+
 const UniversityPanel = ({ sub }) => {
+  if (sub==='Dashboard')       return <UniversityDashboard />;
+  if (sub==='Upload Syllabus') return <SyllabusUploader />;
   if (sub==='Courses')        return <CourseList />;
   if (sub==='Assignments')    return <AssignmentTracker />;
   if (sub==='GPA Calculator') return <GPACalculator />;
+  if (sub==='Recently Deleted') return <TrashPanel type={['course','assignment']} />;
   return <SimpleEditor sub="Resources" />;
 };
 
 /* ── AI Agents ──────────────────────────────────────────────────── */
+// Every default agent carries the same permission shape used by the executor:
+// canDelete is always false (hard ceiling, not just a default — no action spec can delete anyway),
+// folderAccess:[] means "no notebook folder restriction", autoApprove only ever applies to
+// single-item batches regardless of what's set here (multi-item/calendar/notebook always require approval).
+const AGENT_PERM_DEFAULTS = { permissions:{canCreate:true,canEdit:true,canDelete:false}, folderAccess:[], autoApprove:false, businessAssignment:null };
 const DEFAULT_AGENTS = [
-  {id:1,name:'Personal Assistant',role:'Day-to-day productivity & life management',emoji:'✦',color:'#F2C4CE',
-   systemPrompt:"You are Nyla's warm and organized personal assistant. Help her manage her day, plan tasks, and stay on top of her goals. Be practical, supportive, and concise."},
-  {id:2,name:'Task Manager',role:'Organize, prioritize & track projects',emoji:'✅',color:'#E8E0F5',
-   systemPrompt:"You are a highly efficient task management coach for Nyla. Help her break down goals, prioritize work, and stay focused. Be direct and action-oriented."},
-  {id:3,name:'Lunar Love Strategist',role:'Brand strategy for Lunar Love',emoji:'🌙',color:'#F9E4EC',
-   systemPrompt:"You are a brand strategist for Lunar Love, Nyla's spiritual products and crystal business. Help with content ideas, brand voice, Instagram strategy, and business growth."},
-  {id:4,name:'Halo House Advisor',role:'Community & brand for Halo House Co.',emoji:'🏠',color:'#EDE8F5',
-   systemPrompt:"You are a community and brand advisor for Halo House Collective Co. Help with event planning, community building, and creative brand strategy."},
-  {id:5,name:'Love Sativa Advisor',role:'Cannabis wellness brand strategy',emoji:'🌿',color:'#D4EED8',
-   systemPrompt:"You are a brand advisor for Love Sativa, a premium cannabis wellness brand. Assist with compliant marketing, brand positioning, and growth strategy."},
+  {id:1,name:'Chief of Staff',role:'Coordinates priorities across every area of Nyla OS',emoji:'🗂️',color:'#E8E0F5',
+   systemPrompt:"You are Nyla's Chief of Staff — you see the whole picture across her tasks, goals, businesses, and school. Help her decide what matters most right now and coordinate across areas. Be direct and strategic.",...AGENT_PERM_DEFAULTS},
+  {id:2,name:'Personal Assistant',role:'Day-to-day productivity & life management',emoji:'✦',color:'#F2C4CE',
+   systemPrompt:"You are Nyla's warm and organized personal assistant. Help her manage her day, plan tasks, and stay on top of her goals. Be practical, supportive, and concise.",...AGENT_PERM_DEFAULTS},
+  {id:3,name:'Calendar Manager',role:'Scheduling, recurring events & reminders',emoji:'📅',color:'#CBE8F5',
+   systemPrompt:"You manage Nyla's calendar. Help her schedule events, set up recurring commitments like classes, and avoid conflicts. Always confirm the specifics (date, time, recurrence, location) before proposing calendar actions.",...AGENT_PERM_DEFAULTS},
+  {id:4,name:'Task Manager',role:'Organize, prioritize & track projects',emoji:'✅',color:'#E8E0F5',
+   systemPrompt:"You are a highly efficient task management coach for Nyla. Help her break down goals, prioritize work, and stay focused. Be direct and action-oriented.",...AGENT_PERM_DEFAULTS},
+  {id:5,name:'Academic Assistant',role:'Course tracking, assignments & deadlines',emoji:'🎓',color:'#D4EED8',
+   systemPrompt:"You help Nyla stay on top of coursework — assignments, exams, deadlines, and grades. Be organized and proactive about upcoming due dates.",...AGENT_PERM_DEFAULTS},
   {id:6,name:'Study Buddy',role:'Academic support & study guidance',emoji:'📚',color:'#CBE8F5',
-   systemPrompt:"You are Nyla's knowledgeable study buddy. Help her understand coursework, create study plans, review concepts, and stay motivated academically."},
+   systemPrompt:"You are Nyla's knowledgeable study buddy. Help her understand coursework, create study plans, review concepts, and stay motivated academically.",...AGENT_PERM_DEFAULTS},
+  {id:7,name:'Research Analyst',role:'Deep research & fact-finding',emoji:'🔎',color:'#E0EAF5',
+   systemPrompt:"You are a thorough research analyst. Help Nyla investigate topics, summarize findings clearly, and cite the reasoning behind conclusions.",...AGENT_PERM_DEFAULTS},
+  {id:8,name:'Content Strategist',role:'Content planning across all businesses',emoji:'🧭',color:'#F5E8D4',
+   systemPrompt:"You are a cross-business content strategist for Nyla's ventures. Help plan content pillars, campaigns, and calendars that work across platforms.",...AGENT_PERM_DEFAULTS},
+  {id:9,name:'Social Media Manager',role:'Platform-specific content & scheduling',emoji:'📱',color:'#F5D4E8',
+   systemPrompt:"You manage social media execution — captions, hooks, posting schedules, and platform-specific formatting for TikTok, Instagram, YouTube, and Pinterest.",...AGENT_PERM_DEFAULTS},
+  {id:10,name:'Business Planner',role:'Strategy & planning for new and existing ventures',emoji:'📈',color:'#D4E8F0',
+   systemPrompt:"You help Nyla plan and structure her businesses — launch plans, milestones, and strategic priorities. Be concrete and action-oriented.",...AGENT_PERM_DEFAULTS},
+  {id:11,name:'Financial Assistant',role:'Budgeting, costs & financial tracking',emoji:'💰',color:'#E8F0D4',
+   systemPrompt:"You help Nyla think through budgets, costs, and financial decisions across her personal life and businesses. Be precise with numbers and clear about assumptions.",...AGENT_PERM_DEFAULTS},
+  {id:12,name:'Brand Director',role:'Brand voice, identity & positioning',emoji:'🎨',color:'#F0D4E8',
+   systemPrompt:"You are a brand director helping Nyla develop consistent brand voice, visual identity direction, and positioning across her ventures.",...AGENT_PERM_DEFAULTS},
+  {id:13,name:'Idea Development Agent',role:'Turns raw ideas into structured plans',emoji:'💡',color:'#FFF3D4',
+   systemPrompt:"You help Nyla develop raw ideas from her Idea Bank into structured plans — clarifying the concept, next steps, and what it would take to move forward.",...AGENT_PERM_DEFAULTS},
+  {id:14,name:'Document Creator',role:'Drafts documents, notes & reports',emoji:'📝',color:'#E8E8F5',
+   systemPrompt:"You draft clear, well-organized documents for Nyla — notes, reports, and write-ups — and save them to her Notebook when asked.",...AGENT_PERM_DEFAULTS},
+  {id:15,name:'Travel Planner',role:'Trip planning & itineraries',emoji:'✈️',color:'#D4F0EE',
+   systemPrompt:"You help Nyla plan trips — itineraries, packing, logistics, and timing — and can add travel dates to her calendar.",...AGENT_PERM_DEFAULTS},
+  {id:16,name:'Book and Learning Coach',role:'Reading recommendations & lesson extraction',emoji:'📖',color:'#EAE0F5',
+   systemPrompt:"You help Nyla get more out of what she reads — summarizing notes, pulling out lessons, and recommending what to read next.",...AGENT_PERM_DEFAULTS},
+  {id:17,name:'Habit Coach',role:'Habit building & accountability',emoji:'🔥',color:'#F5E0D4',
+   systemPrompt:"You help Nyla build and stick to habits. Be encouraging but honest about what's working and what isn't.",...AGENT_PERM_DEFAULTS},
+  {id:18,name:'Project Manager',role:'Keeps multi-step projects on track',emoji:'📋',color:'#D4E0F5',
+   systemPrompt:"You help Nyla break projects into concrete steps, track progress, and keep things moving. Be structured and specific.",...AGENT_PERM_DEFAULTS},
+  {id:19,name:'Lunar Love Strategist',role:'Brand strategy for Lunar Love',emoji:'🌙',color:'#F9E4EC',
+   systemPrompt:"You are a brand strategist for Lunar Love, Nyla's spiritual products and crystal business. Help with content ideas, brand voice, Instagram strategy, and business growth.",...AGENT_PERM_DEFAULTS,businessAssignment:'Lunar Love'},
+  {id:20,name:'Halo House Advisor',role:'Community & brand for Halo House Co.',emoji:'🏠',color:'#EDE8F5',
+   systemPrompt:"You are a community and brand advisor for Halo House Collective Co. Help with event planning, community building, and creative brand strategy.",...AGENT_PERM_DEFAULTS,businessAssignment:'Halo House Collective Co.'},
+  {id:21,name:'Love Sativa Advisor',role:'Cannabis wellness brand strategy',emoji:'🌿',color:'#D4EED8',
+   systemPrompt:"You are a brand advisor for Love Sativa, a premium cannabis wellness brand. Assist with compliant marketing, brand positioning, and growth strategy.",...AGENT_PERM_DEFAULTS,businessAssignment:'Love Sativa'},
 ];
+
+const AGENT_STATUS_META = {
+  available:         {label:'Available',          icon:'●', color:'#4CAF77'},
+  thinking:           {label:'Thinking',           icon:'◐', color:'#4285f4'},
+  working:            {label:'Working',            icon:'⚙',  color:'#4285f4'},
+  waiting_approval:   {label:'Waiting for Approval',icon:'⏸', color:'#F4A261'},
+  needs_information:  {label:'Needs Information',  icon:'❓', color:'#F4A261'},
+  completed:          {label:'Completed',          icon:'✓', color:'#4CAF77'},
+  error:              {label:'Error',              icon:'⚠',  color:'#e57373'},
+};
 
 const AgentCard = ({ agent, onEdit, onDelete }) => {
   const [chatOpen, setChatOpen] = useState(false);
@@ -5935,9 +6942,30 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [pendingPlan, setPendingPlan] = useState(null); // {msgIndex, steps}
+  const [errorState, setErrorState] = useState(false);
+  const [justCompleted, setJustCompleted] = useState(false);
   const sessionId = useRef(null);
   const endRef = useRef(null);
-  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,fullscreen]);
+
+  const status = errorState ? 'error'
+    : loading ? 'thinking'
+    : pendingPlan ? (pendingPlan.steps.some(s=>s.status==='needs_info') ? 'needs_information' : 'waiting_approval')
+    : justCompleted ? 'completed'
+    : 'available';
+  const statusMeta = AGENT_STATUS_META[status];
+
+  const activityLog = JSON.parse(localStorage.getItem('nylaos_agent_activity_log')||'[]');
+  const recentWork = activityLog.find(e=>e.agent===agent.name);
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,fullscreen,pendingPlan]);
+
+  useEffect(()=>{
+    const ctx = JSON.parse(localStorage.getItem('nylaos_agent_pending_context')||'null');
+    if(ctx && ctx.source==='idea'){
+      localStorage.removeItem('nylaos_agent_pending_context');
+      setMsgs(m=>[...m,{role:'assistant',text:`I see you shared "${ctx.title}" from your Idea Bank. What would you like me to do with it — turn it into a task, a notebook page, or something else?`}]);
+    }
+  },[]);
 
   const send = async () => {
     if(!input.trim()||loading) return;
@@ -5946,9 +6974,9 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
     if(!sessionId.current) sessionId.current=Date.now();
     const userText=input.trim();
     const history=[...msgs,{role:'user',text:userText}];
-    setMsgs(history); setInput(''); setLoading(true);
+    setMsgs(history); setInput(''); setLoading(true); setErrorState(false); setJustCompleted(false);
     try {
-      const agentSystem=agent.systemPrompt+buildAgentContext(agent.name)+AGENT_CMD_DOCS;
+      const agentSystem=agent.systemPrompt+buildAgentContext(agent.name)+AGENT_ACTION_DOCS;
       const res=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
@@ -5958,21 +6986,54 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
       const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
       const updated=[...history,{role:'assistant',text:reply}];
       setMsgs(updated);
-      execAgentCmd(reply);
+      const rawCmds = parseAgentActions(reply);
+      if(rawCmds.length){
+        setPendingPlan({msgIndex:updated.length-1, steps:buildActionPlan(rawCmds)});
+      }
       saveChatSession(sessionId.current, agent.name, 'agent', updated);
     } catch(e) {
+      setErrorState(true);
       setMsgs(m=>[...m,{role:'assistant',text:'⚠️ Connection issue. Check your API key.'}]);
     } finally { setLoading(false); }
   };
 
+  const [undoneBatch, setUndoneBatch] = useState(new Set());
+  const approvePlan = approvedSteps => {
+    const results = executeActionPlan(approvedSteps, agent);
+    const done = results.filter(r=>r.execStatus==='done');
+    const failed = results.filter(r=>r.execStatus!=='done');
+    let summary = done.length ? `✅ Done:\n${done.map(r=>'· '+r.previewLine).join('\n')}` : '';
+    if(failed.length) summary += `${summary?'\n\n':''}⚠️ Needs attention:\n${failed.map(r=>'· '+r.previewLine+' — '+r.reason).join('\n')}`;
+    setMsgs(m=>{
+      const updated=[...m,{role:'assistant',text:summary||'Nothing to do.',batchResults:done.length?results:null}];
+      return updated;
+    });
+    setPendingPlan(null);
+    if(failed.length && !done.length) setErrorState(true);
+    else { setJustCompleted(true); setTimeout(()=>setJustCompleted(false), 6000); }
+  };
+  const undoBatch = (msgIdx, results) => {
+    undoActionBatch(results);
+    setUndoneBatch(s=>new Set(s).add(msgIdx));
+    setMsgs(m=>[...m,{role:'assistant',text:'Undone — everything from that batch was moved to Recently Deleted.'}]);
+  };
+
   const renderMsgs = () => (<>
-    {msgs.map((m,i)=>(
-      <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+    {msgs.map((m,i)=>(<React.Fragment key={i}>
+      <div style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
         <div style={{ maxWidth:'86%', padding:'8px 12px', borderRadius:12, fontSize:12.5, lineHeight:1.6,
           background:m.role==='user'?C.rose:`${C.lavender}CC`, color:m.role==='user'?'#fff':C.rose,
-          borderBottomRightRadius:m.role==='user'?3:12, borderBottomLeftRadius:m.role==='assistant'?3:12, whiteSpace:'pre-wrap' }}>{m.text}</div>
+          borderBottomRightRadius:m.role==='user'?3:12, borderBottomLeftRadius:m.role==='assistant'?3:12, whiteSpace:'pre-wrap' }}>{m.role==='assistant'?stripAgentCmd(m.text):m.text}</div>
       </div>
-    ))}
+      {m.batchResults && !undoneBatch.has(i) && (
+        <div style={{display:'flex',justifyContent:'flex-start'}}>
+          <button onClick={()=>undoBatch(i,m.batchResults)} style={{marginTop:2,padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>↩ Undo this batch</button>
+        </div>
+      )}
+      {pendingPlan && pendingPlan.msgIndex===i && (
+        <ActionPreviewPanel plan={pendingPlan.steps} onApprove={approvePlan} onCancel={()=>setPendingPlan(null)} />
+      )}
+    </React.Fragment>))}
     {loading&&<div style={{ fontSize:12,color:C.textMuted,fontStyle:'italic' }}>thinking...</div>}
     <div ref={endRef}/>
   </>);
@@ -6005,17 +7066,29 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
         </div>
       )}
       <Card style={{ padding:'18px', display:'flex', flexDirection:'column' }}>
-        <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:12 }}>
-          <div style={{ width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, flexShrink:0 }}>{agent.emoji}</div>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:10 }}>
+          <div style={{ position:'relative', flexShrink:0 }}>
+            <div style={{ width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22 }}>{agent.emoji}</div>
+            <div title={statusMeta.label} style={{ position:'absolute', bottom:-2, right:-2, width:15, height:15, borderRadius:'50%', background:statusMeta.color, border:`2px solid ${C.card}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:7, color:'#fff' }}/>
+          </div>
           <div style={{ flex:1 }}>
             <div style={{ fontSize:14, fontWeight:500, color:C.rose, marginBottom:2 }}>{agent.name}</div>
             <div style={{ fontSize:12, color:C.textLight, lineHeight:1.4 }}>{agent.role}</div>
+            <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:4 }}>
+              <span style={{ fontSize:10, color:statusMeta.color, fontWeight:600 }}>{statusMeta.icon} {statusMeta.label}</span>
+              {agent.businessAssignment && <span style={{ fontSize:9.5, padding:'1px 6px', borderRadius:6, background:`${C.accent}18`, color:C.accent }}>{agent.businessAssignment}</span>}
+            </div>
           </div>
           <div style={{ display:'flex', gap:4, flexShrink:0 }}>
             {onEdit&&<button onClick={onEdit} style={{ background:`${C.lavender}90`,border:'none',borderRadius:7,padding:'4px 9px',fontSize:11,color:C.rose,cursor:'pointer' }}>Edit</button>}
             {onDelete&&<button onClick={onDelete} style={{ background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:18,lineHeight:1 }}>×</button>}
           </div>
         </div>
+        {recentWork && (
+          <div style={{ fontSize:10.5, color:C.textMuted, marginBottom:10, padding:'6px 8px', borderRadius:8, background:`${C.pinkLight}` }}>
+            Recent: {recentWork.actions[0]?.preview} <span style={{opacity:0.7}}>· {new Date(recentWork.ts).toLocaleDateString()}</span>
+          </div>
+        )}
         <button onClick={()=>setChatOpen(o=>!o)} style={{ padding:'7px 0', borderRadius:10, background:chatOpen?C.rose:`${C.pink}55`, color:chatOpen?'#fff':C.rose, border:`0.5px solid ${chatOpen?C.rose:C.border}`, fontSize:12.5, cursor:'pointer', transition:'all 0.15s' }}>
           {chatOpen?'Close Chat':'✦ Open Chat'}
         </button>
@@ -6156,26 +7229,50 @@ const AgentsPanel = () => {
   const [agents, setAgents] = useState(()=>{ const s=localStorage.getItem(KEY); return s?JSON.parse(s):DEFAULT_AGENTS; });
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({name:'',role:'',emoji:'🤖',color:'#E8E0F5',systemPrompt:''});
+  const BLANK_FORM = {name:'',role:'',emoji:'🤖',color:'#E8E0F5',systemPrompt:'',businessAssignment:'',folderAccess:[],autoApprove:false,permissions:{canCreate:true,canEdit:true,canDelete:false}};
+  const [form, setForm] = useState(BLANK_FORM);
   const COLORS = ['#F2C4CE','#E8E0F5','#D4EED8','#CBE8F5','#FFF9C4','#FFE0B2'];
+  const notebookFolders = JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
 
   const save = a=>{setAgents(a);localStorage.setItem(KEY,JSON.stringify(a));};
   const submit = ()=>{
     if(!form.name.trim()) return;
     if(editId) { save(agents.map(a=>a.id===editId?{...a,...form}:a)); setEditId(null); }
     else save([...agents,{id:Date.now(),...form}]);
-    setForm({name:'',role:'',emoji:'🤖',color:'#E8E0F5',systemPrompt:''}); setShowCreate(false);
+    setForm(BLANK_FORM); setShowCreate(false);
   };
-  const startEdit = a=>{setEditId(a.id);setForm({name:a.name,role:a.role,emoji:a.emoji,color:a.color,systemPrompt:a.systemPrompt});setShowCreate(true);};
-  const isDefault = a=>a.id>=1&&a.id<=6;
+  const startEdit = a=>{setEditId(a.id);setForm({...BLANK_FORM,name:a.name,role:a.role,emoji:a.emoji,color:a.color,systemPrompt:a.systemPrompt,businessAssignment:a.businessAssignment||'',folderAccess:a.folderAccess||[],autoApprove:a.autoApprove||false,permissions:a.permissions||BLANK_FORM.permissions});setShowCreate(true);};
+  const toggleFormFolder = name => setForm(f=>({...f, folderAccess: f.folderAccess.includes(name) ? f.folderAccess.filter(x=>x!==name) : [...f.folderAccess, name]}));
+  const isDefault = a=>a.id>=1&&a.id<=21;
+  const [showLog, setShowLog] = useState(false);
+  const activityLog = JSON.parse(localStorage.getItem('nylaos_agent_activity_log')||'[]');
 
   return (
     <div className="fade-in" style={{ maxWidth:780 }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
         <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:21, color:C.rose }}>AI Agents</div>
-        <button onClick={()=>{setShowCreate(s=>!s);setEditId(null);setForm({name:'',role:'',emoji:'🤖',color:'#E8E0F5',systemPrompt:''}); }}
-          style={{ padding:'9px 20px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:'pointer' }}>+ Create Agent</button>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>setShowLog(s=>!s)} style={{ padding:'9px 16px', borderRadius:12, background:showLog?`${C.accent}25`:'transparent', border:`0.5px solid ${C.border}`, color:C.text, fontSize:13, cursor:'pointer' }}>🕐 Activity Log{activityLog.length?` (${activityLog.length})`:''}</button>
+          <button onClick={()=>{setShowCreate(s=>!s);setEditId(null);setForm(BLANK_FORM); }}
+            style={{ padding:'9px 20px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:'pointer' }}>+ Create Agent</button>
+        </div>
       </div>
+      {showLog && (
+        <Card style={{marginBottom:20, maxHeight:340, overflowY:'auto'}}>
+          <SectionHeading>Agent Activity Log</SectionHeading>
+          {activityLog.length===0 && <div style={{fontSize:13,color:C.textMuted,fontStyle:'italic',padding:'8px 0'}}>No agent actions yet. Approved actions from any agent chat will show up here.</div>}
+          {activityLog.map((entry,i)=>(
+            <div key={i} style={{padding:'10px 0',borderBottom:i<activityLog.length-1?`0.5px solid ${C.border}`:'none'}}>
+              <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>{entry.agent} · {new Date(entry.ts).toLocaleString()}</div>
+              {entry.actions.map((a,j)=>(
+                <div key={j} style={{fontSize:12,color:a.status==='done'?C.text:'#F4A261',display:'flex',gap:6,alignItems:'flex-start',marginBottom:2}}>
+                  <span>{a.status==='done'?'✅':'⚠️'}</span><span>{a.preview}{a.status!=='done'?` — ${a.reason}`:''}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </Card>
+      )}
       {showCreate && (
         <Card style={{ marginBottom:20, background:`${C.lavender}40` }}>
           <SectionHeading>{editId?'Edit Agent':'New Agent'}</SectionHeading>
@@ -6193,6 +7290,43 @@ const AgentsPanel = () => {
             </div>
             <TextArea value={form.systemPrompt} height={80} placeholder="System prompt — who is this agent and how should it behave?"
               onChange={e=>setForm(f=>({...f,systemPrompt:e.target.value}))}/>
+
+            <div style={{borderTop:`0.5px solid ${C.border}`,paddingTop:10,marginTop:2}}>
+              <div style={{fontSize:11,fontWeight:600,color:C.rose,marginBottom:8,letterSpacing:0.3,textTransform:'uppercase'}}>Permissions & Assignment</div>
+              <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
+                <span style={{fontSize:12,color:C.textLight}}>Business:</span>
+                <select value={form.businessAssignment} onChange={e=>setForm(f=>({...f,businessAssignment:e.target.value}))}
+                  style={{padding:'5px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:12}}>
+                  <option value="">None (personal / cross-business)</option>
+                  {VENTURES.map(v=><option key={v} value={v}>{v}</option>)}
+                </select>
+                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:C.textLight,cursor:'pointer'}}>
+                  <input type="checkbox" checked={form.autoApprove} onChange={e=>setForm(f=>({...f,autoApprove:e.target.checked}))}/>
+                  Auto-approve single-item actions
+                </label>
+              </div>
+              <div style={{display:'flex',gap:10,marginBottom:8}}>
+                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:C.textLight,cursor:'pointer'}}>
+                  <input type="checkbox" checked={form.permissions.canCreate} onChange={e=>setForm(f=>({...f,permissions:{...f.permissions,canCreate:e.target.checked}}))}/> Can create
+                </label>
+                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:C.textLight,cursor:'pointer'}}>
+                  <input type="checkbox" checked={form.permissions.canEdit} onChange={e=>setForm(f=>({...f,permissions:{...f.permissions,canEdit:e.target.checked}}))}/> Can edit
+                </label>
+                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:C.textMuted,cursor:'not-allowed'}} title="Agents can never permanently delete — this is a hard ceiling, not a per-agent setting.">
+                  <input type="checkbox" checked={false} disabled/> Can delete <span style={{fontSize:10}}>(never — hard limit)</span>
+                </label>
+              </div>
+              {notebookFolders.length>0 && (<>
+                <div style={{fontSize:11,color:C.textLight,marginBottom:5}}>Notebook folder access (none checked = all folders):</div>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                  {notebookFolders.map(f=>(
+                    <button key={f.id} onClick={()=>toggleFormFolder(f.name)} type="button" style={{padding:'3px 9px',borderRadius:7,fontSize:10.5,cursor:'pointer',
+                      background:form.folderAccess.includes(f.name)?`${C.accent}30`:'transparent',border:`0.5px solid ${form.folderAccess.includes(f.name)?C.accent:C.border}`,color:form.folderAccess.includes(f.name)?C.accent:C.textMuted}}>{f.icon} {f.name}</button>
+                  ))}
+                </div>
+              </>)}
+            </div>
+
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
               <button onClick={()=>{setShowCreate(false);setEditId(null);}} style={{ padding:'8px 16px',borderRadius:10,background:`${C.pink}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:13,cursor:'pointer' }}>Cancel</button>
               <button onClick={submit} style={{ padding:'8px 20px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer' }}>{editId?'Update':'Create'}</button>
@@ -6859,6 +7993,242 @@ const buildAgentContext = (agentName = null) => {
   } catch(e) { return ''; }
 };
 
+/* ── Agent Action Pipeline ──────────────────────────────────────────
+   parse → plan (+ slot-filling) → preview → approve → execute (+ verify) → log
+   Extends the older single-[CMD:] executor with a real multi-step pipeline that
+   never fires actions silently — every plan is shown to the user before it runs. */
+const AGENT_ACTION_SPECS = {
+  addTask: {
+    label:'Add task', requiredFields:['text'], recommendedFields:[],
+    preview:c=>`Add task: "${c.text||'(missing text)'}"`,
+    execute:c=>{
+      const KEY='nylaos_tasks';
+      const list=JSON.parse(localStorage.getItem(KEY)||'[]');
+      const id=Date.now()+Math.floor(Math.random()*1000);
+      list.push({id,text:c.text,done:false,created:new Date().toISOString()});
+      localStorage.setItem(KEY,JSON.stringify(list));
+      const ok=JSON.parse(localStorage.getItem(KEY)||'[]').some(x=>x.id===id);
+      return {success:ok, navTo:['tasks',"Today's Tasks"], undo:{storageKey:KEY, type:'task', ids:[id], name:c.text}};
+    },
+  },
+  addGoal: {
+    label:'Add goal', requiredFields:['title'], recommendedFields:['category','targetDate'],
+    preview:c=>`Add goal: "${c.title||'(missing title)'}"${c.category?` (${c.category})`:''}`,
+    execute:c=>{
+      const KEY='nylaos_goals'; const now=new Date();
+      const list=JSON.parse(localStorage.getItem(KEY)||'[]');
+      const id=Date.now()+Math.floor(Math.random()*1000);
+      const pt=c.periodType||'monthly';
+      const pv=c.periodValue||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+      list.push({id,title:c.title,description:c.description||'',targetDate:c.targetDate||'',category:c.category||'',progress:0,periodType:pt,periodValue:pv,created:now.toISOString()});
+      localStorage.setItem(KEY,JSON.stringify(list));
+      const ok=JSON.parse(localStorage.getItem(KEY)||'[]').some(x=>x.id===id);
+      return {success:ok, navTo:['goals',pt==='yearly'?'Yearly':pt==='quarterly'?'Quarterly':'Monthly'], undo:{storageKey:KEY, type:'goal', ids:[id], name:c.title}};
+    },
+  },
+  addEvent: {
+    label:'Add calendar event', requiredFields:['date','text'], recommendedFields:['location','reminder'],
+    preview:c=>`Add calendar event: "${c.text||'(missing text)'}" on ${c.date||'(missing date)'}`,
+    execute:c=>{
+      const KEY='nylaos_events';
+      const list=JSON.parse(localStorage.getItem(KEY)||'[]');
+      const id=Date.now()+Math.floor(Math.random()*1000);
+      const text=c.location?`${c.text} @ ${c.location}`:c.text;
+      list.push({id,date:c.date,text});
+      localStorage.setItem(KEY,JSON.stringify(list));
+      const ok=JSON.parse(localStorage.getItem(KEY)||'[]').some(x=>x.id===id);
+      return {success:ok, navTo:['calendar','Monthly'], undo:{storageKey:KEY, type:'calendar_event', ids:[id], name:text}};
+    },
+  },
+  addRecurringEvent: {
+    label:'Add recurring calendar events',
+    requiredFields:['text','startDate','frequency'],
+    recommendedFields:['endDate','location','reminder','endTime'],
+    preview:c=>{
+      const n=recurringCount(c);
+      return `Add ${n} recurring "${c.text||'(missing name)'}" events (${c.frequency||'?'}, starting ${c.startDate||'?'}${c.endDate?`, through ${c.endDate}`:''})`;
+    },
+    execute:c=>{
+      const KEY='nylaos_events';
+      const list=JSON.parse(localStorage.getItem(KEY)||'[]');
+      const freq=c.frequency||'weekly';
+      const count=recurringCount(c);
+      const groupId=Date.now()+Math.floor(Math.random()*1000);
+      const start=new Date(c.startDate+'T00:00:00');
+      const created=[];
+      for(let i=0;i<count;i++){
+        const d=new Date(start);
+        if(freq==='daily') d.setDate(d.getDate()+i);
+        else if(freq==='weekly') d.setDate(d.getDate()+i*7);
+        else if(freq==='biweekly') d.setDate(d.getDate()+i*14);
+        else if(freq==='monthly') d.setMonth(d.getMonth()+i);
+        const dateStr=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        let text=c.text; if(c.endTime) text=`${text} (${c.endTime})`; if(c.location) text=`${text} @ ${c.location}`; if(c.reminder) text=`${text} — reminder: ${c.reminder}`;
+        const id=groupId+i;
+        list.push({id,date:dateStr,text,recurringGroupId:groupId});
+        created.push(id);
+      }
+      localStorage.setItem(KEY,JSON.stringify(list));
+      const verify=JSON.parse(localStorage.getItem(KEY)||'[]');
+      const ok=created.every(id=>verify.some(e=>e.id===id));
+      return {success:ok, navTo:['calendar','Monthly'], undo:{storageKey:KEY, type:'calendar_event', ids:created, name:`${c.text} (${created.length}×)`}};
+    },
+  },
+  addNote: {
+    label:'Create notebook page', requiredFields:['name'], recommendedFields:['folder'],
+    preview:c=>`Create Notebook page: "${c.name||'(missing name)'}"${c.folder?` in ${c.folder}`:''}`,
+    execute:c=>{
+      const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
+      const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
+      const folder=folders.find(f=>f.name===(c.folder||'All Notes'));
+      const id=Date.now()+Math.floor(Math.random()*1000);
+      pages.push({id,name:c.name,folderId:folder?folder.id:1,content:c.content||'',created:new Date().toISOString(),updated:new Date().toISOString()});
+      localStorage.setItem('nylaos_nb_pages',JSON.stringify(pages));
+      const ok=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]').some(x=>x.id===id);
+      return {success:ok, navTo:['notebook',c.folder||'All Notes'], undo:{storageKey:'nylaos_nb_pages', type:'notebook_page', ids:[id], name:c.name}};
+    },
+  },
+  addIdea: {
+    label:'Add idea', requiredFields:['title'], recommendedFields:['category'],
+    preview:c=>`Add idea: "${c.title||'(missing title)'}"`,
+    execute:c=>{
+      const KEY='nylaos_ideas';
+      const list=JSON.parse(localStorage.getItem(KEY)||'[]');
+      const id=Date.now()+Math.floor(Math.random()*1000);
+      list.push({id,title:c.title,content:c.content||'',category:c.category||'personal',created:new Date().toISOString()});
+      localStorage.setItem(KEY,JSON.stringify(list));
+      const ok=JSON.parse(localStorage.getItem(KEY)||'[]').some(x=>x.id===id);
+      return {success:ok, navTo:['ideas',null], undo:{storageKey:KEY, type:'idea', ids:[id], name:c.title}};
+    },
+  },
+};
+
+// Session-scoped undo: moves everything a completed batch created into Recently Deleted
+// (agents never hard-delete, so undo is itself just another safe, recoverable trash move).
+const undoActionBatch = results => {
+  let undoneCount = 0;
+  results.forEach(r=>{
+    if(r.execStatus!=='done' || !r.undo) return;
+    const {storageKey, type, ids, name} = r.undo;
+    const list = JSON.parse(localStorage.getItem(storageKey)||'[]');
+    ids.forEach(id=>{
+      const item = list.find(x=>x.id===id);
+      if(item) addToTrash(type, name, item, storageKey);
+    });
+    localStorage.setItem(storageKey, JSON.stringify(list.filter(x=>!ids.includes(x.id))));
+    undoneCount++;
+  });
+  return undoneCount;
+};
+const recurringCount = c => {
+  const defaults={daily:14,weekly:26,biweekly:13,monthly:12};
+  if(c.endDate && c.startDate){
+    const start=new Date(c.startDate+'T00:00:00'), end=new Date(c.endDate+'T00:00:00');
+    const days=Math.max(0,Math.round((end-start)/86400000));
+    const per={daily:1,weekly:7,biweekly:14,monthly:30}[c.frequency||'weekly']||7;
+    return Math.min(100, Math.max(1, Math.floor(days/per)+1));
+  }
+  return Math.min(100, Math.max(1, parseInt(c.count)||defaults[c.frequency||'weekly']||12));
+};
+
+const stripAgentCmd = s => (s||'').replace(/\[CMDS:\[[\s\S]*?\]\]/g,'').replace(/\[CMD:\{[\s\S]*?\}\]/g,'').trim();
+
+// Parses either the new multi-action format [CMDS:[{...},{...}]] or the legacy single [CMD:{...}]
+const parseAgentActions = text => {
+  const multi = text.match(/\[CMDS:(\[[\s\S]*?\])\]/);
+  if(multi){ try { const arr=JSON.parse(multi[1]); if(Array.isArray(arr)) return arr; } catch(e){} }
+  const single = text.match(/\[CMD:(\{[\s\S]*?\})\]/);
+  if(single){ try { return [JSON.parse(single[1])]; } catch(e){} }
+  return [];
+};
+
+// Builds a preview-able plan from raw commands, flagging any missing required fields
+// so the UI can ask for just that information rather than executing blind.
+const buildActionPlan = rawCmds => rawCmds.map((cmd,i)=>{
+  const spec = AGENT_ACTION_SPECS[cmd.action];
+  if(!spec) return {id:i, cmd, spec:null, previewLine:`Unknown action: ${cmd.action}`, missingFields:[], status:'unsupported'};
+  const missingFields = spec.requiredFields.filter(f=>!cmd[f]);
+  return {id:i, cmd:{...cmd}, spec, previewLine:spec.preview(cmd), missingFields, status: missingFields.length?'needs_info':'ready'};
+});
+
+const AGENT_PERMISSIONS_DEFAULT = { canCreate:true, canEdit:true, canDelete:false };
+
+// Executes an approved plan sequentially, verifying each step and logging the batch —
+// per-step failures don't block the rest of the batch, they're just flagged.
+// agent may be a plain string (legacy callers) or the full agent object, which carries the
+// permissions/folderAccess this function actually enforces before running anything.
+const executeActionPlan = (plan, agent) => {
+  const agentObj = typeof agent==='string' ? {name:agent, permissions:AGENT_PERM_DEFAULTS.permissions, folderAccess:[]} : agent;
+  const agentName = agentObj.name;
+  const perms = agentObj.permissions || AGENT_PERM_DEFAULTS.permissions;
+  const results = plan.map(step=>{
+    if(!step.spec) return {...step, execStatus:'failed', reason:'Unsupported action'};
+    if(step.missingFields.length) return {...step, execStatus:'failed', reason:`Missing: ${step.missingFields.join(', ')}`};
+    if(perms.canCreate===false) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to create items — enable "Can create" in this agent's settings.`};
+    if(step.cmd.action==='addNote' && agentObj.folderAccess?.length && !agentObj.folderAccess.includes(step.cmd.folder||'All Notes')) {
+      return {...step, execStatus:'failed', reason:`${agentName} doesn't have access to the "${step.cmd.folder||'All Notes'}" folder`};
+    }
+    try {
+      const {success, navTo, undo} = step.spec.execute(step.cmd);
+      return {...step, execStatus: success?'done':'failed', reason: success?'':'Could not verify the item was saved', navTo, undo};
+    } catch(e) { return {...step, execStatus:'failed', reason:e.message||'Error running action'}; }
+  });
+  const logKey='nylaos_agent_activity_log';
+  const log=JSON.parse(localStorage.getItem(logKey)||'[]');
+  log.unshift({
+    ts:new Date().toISOString(), agent:agentName,
+    actions:results.map(r=>({type:r.cmd.action, label:r.spec?.label||r.cmd.action, preview:r.previewLine, status:r.execStatus, reason:r.reason})),
+  });
+  localStorage.setItem(logKey, JSON.stringify(log.slice(0,300)));
+  return results;
+};
+
+/* ── Action Preview Panel — Approve All / Edit Actions / Cancel ─── */
+const ActionPreviewPanel = ({ plan, onApprove, onCancel }) => {
+  const [steps, setSteps] = useState(plan);
+  const [editing, setEditing] = useState(false);
+  const updateField = (i, field, val) => setSteps(s=>s.map((step,idx)=>{
+    if(idx!==i) return step;
+    const cmd={...step.cmd,[field]:val};
+    const missingFields=step.spec?step.spec.requiredFields.filter(f=>!cmd[f]):step.missingFields;
+    return {...step, cmd, missingFields, status:missingFields.length?'needs_info':'ready', previewLine: step.spec?step.spec.preview(cmd):step.previewLine};
+  }));
+  const removeStep = i => setSteps(s=>s.filter((_,idx)=>idx!==i));
+  const blockedCount = steps.filter(s=>s.status!=='ready').length;
+  return (
+    <div style={{border:`0.5px solid ${C.border}`,borderRadius:12,padding:'12px 14px',background:`${C.lavender}18`,marginTop:6}}>
+      <div style={{fontSize:11.5,fontWeight:600,color:C.rose,marginBottom:8}}>This will:</div>
+      <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:10}}>
+        {steps.map((step,i)=>(
+          <div key={i} style={{padding:'8px 10px',borderRadius:9,background:C.card,border:`0.5px solid ${step.status==='needs_info'?'#F4A261':C.border}`}}>
+            <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
+              <span style={{fontSize:12}}>{step.status==='needs_info'?'⚠️':step.status==='unsupported'?'❌':'✅'}</span>
+              <div style={{flex:1,fontSize:12,color:C.text}}>{step.previewLine}</div>
+              {editing && <button onClick={()=>removeStep(i)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14,lineHeight:1}}>×</button>}
+            </div>
+            {(step.status==='needs_info'||editing) && step.spec && (
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:7,paddingLeft:20}}>
+                {[...step.missingFields, ...step.spec.recommendedFields.filter(f=>!step.missingFields.includes(f))].map(f=>(
+                  <input key={f} placeholder={f} defaultValue={step.cmd[f]||''} onBlur={e=>updateField(i,f,e.target.value)}
+                    style={{padding:'4px 8px',borderRadius:7,border:`0.5px solid ${step.missingFields.includes(f)?'#F4A261':C.border}`,background:C.pinkLight,color:C.text,fontSize:11,fontFamily:'inherit',width:110}}/>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:6}}>
+        <button onClick={()=>onApprove(steps)} disabled={blockedCount>0 && !steps.every(s=>s.status==='ready')}
+          style={{padding:'7px 16px',borderRadius:9,background:blockedCount>0?C.textMuted:C.rose,color:'#fff',border:'none',fontSize:12,cursor:blockedCount>0?'not-allowed':'pointer',opacity:blockedCount>0?0.6:1}}>
+          Approve All{blockedCount>0?` (fill in ${blockedCount} field${blockedCount>1?'s':''})`:''}
+        </button>
+        <button onClick={()=>setEditing(e=>!e)} style={{padding:'7px 14px',borderRadius:9,background:'transparent',border:`0.5px solid ${C.border}`,color:C.text,fontSize:12,cursor:'pointer'}}>{editing?'Done editing':'Edit Actions'}</button>
+        <button onClick={onCancel} style={{padding:'7px 14px',borderRadius:9,background:'transparent',border:'none',color:C.textMuted,fontSize:12,cursor:'pointer'}}>Cancel</button>
+      </div>
+    </div>
+  );
+};
+
 /* ── Shared Agent Command Executor ─────────────────────────────── */
 const AGENT_CMD_DOCS = `
 
@@ -6874,6 +8244,28 @@ You can take direct action in Nyla's dashboard. When she asks you to create or u
 
 For recurring events: frequency is daily/weekly/biweekly/monthly; count defaults to 26 (weekly), 12 (monthly), 14 (daily). Max 100 occurrences.
 Only include ONE command per response, and only when actually performing the action.`;
+
+/* Multi-action pipeline docs — used by agents whose chat shows a real preview/approval
+   step before anything executes (the Live Agent Office), not the quick single-action chat. */
+const AGENT_ACTION_DOCS = `
+
+You can propose real actions in Nyla's dashboard. Nothing you propose executes until she clicks Approve — you are never executing directly, only proposing a plan.
+
+When she asks you to create, schedule, or add something, respond conversationally, then end with ONE block containing an array of every action needed:
+[CMDS:[{"action":"addTask","text":"..."},{"action":"addEvent","date":"YYYY-MM-DD","text":"..."}]]
+
+Available actions and their fields:
+- addTask: {text}
+- addGoal: {title, category, periodType, periodValue, targetDate}
+- addEvent: {date, text, location, reminder}
+- addRecurringEvent: {text, startDate, frequency: daily|weekly|biweekly|monthly, endDate OR count, location, reminder, endTime}
+- addNote: {name, folder, content}
+- addIdea: {title, content, category}
+
+Rules:
+- If she mentions a recurring commitment (e.g. "class Monday Wednesday Friday at 10am"), use addRecurringEvent and ask conversationally (in your text, not the command) for whatever required info is missing — course name, end time, start date, end date, location, reminder — rather than guessing. You can still include the command with the fields you do have; the dashboard will prompt her for anything missing before she can approve.
+- Only include fields you actually know; never invent a date or detail that wasn't given.
+- Always include every action from a multi-part request in the SAME [CMDS:...] block so she reviews them together.`;
 
 const execAgentCmd = text => {
   const match = text.match(/\[CMD:(\{[\s\S]*?\})\]/);
@@ -7236,6 +8628,12 @@ const App = () => {
 
   // Auto-collapse secondary sidebar when switching to mobile
   useEffect(() => { if (isMobile) setSecCollapsed(true); }, [isMobile]);
+
+  // Global cross-section navigation bridge (e.g. "Open Notebook Page" from an Idea Bank card)
+  useEffect(() => {
+    window._navigateTo = (nav, sub) => { setActiveNav(nav); if (sub) setActiveSub(sub); };
+    return () => { delete window._navigateTo; };
+  }, []);
 
   const addBiz = name => {
     const trimmed = name.trim();
