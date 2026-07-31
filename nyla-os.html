@@ -627,7 +627,7 @@ const NAV = [
   { id:'ideas',      label:'Ideas',      sub:[] },
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Dream Life','Recently Deleted'] },
-  { id:'business',   label:'Business',   sub:['Lunar Love','Halo House Collective Co.','Love Sativa','Dropshipping'] },
+  { id:'business',   label:'Business',   sub:['Overview','Lunar Love','Halo House Collective Co.','Love Sativa','Dropshipping'] },
   { id:'social',     label:'Social Media', sub:['Overview','Accounts','Content Calendar','Recently Deleted'] },
   { id:'cosmic',     label:'Cosmic',     sub:['Numerology','Astrology','Matrix of Destiny'] },
   { id:'university', label:'University', sub:['Dashboard','Upload Syllabus','Courses','Assignments','GPA Calculator','Resources','Recently Deleted'] },
@@ -3369,6 +3369,10 @@ const IdeaBank = () => {
   const [newCat, setNewCat] = useState('personal');
   const [expanded, setExpanded] = useState(null);
   const [fullscreenId, setFullscreenId] = useState(null);
+  useEffect(() => {
+    const req = localStorage.getItem('nylaos_idea_open_request');
+    if (req) { localStorage.removeItem('nylaos_idea_open_request'); setFullscreenId(parseInt(req)); }
+  }, []);
   const [editId, setEditId] = useState(null);
   const [editContent, setEditContent] = useState('');
   const [searchQ, setSearchQ] = useState('');
@@ -5180,10 +5184,10 @@ const VENTURES = [
   'Mommy & Me Fitness',
   'Love Nyla',
 ];
-const VENTURE_OPTIONAL_MODULES = ['Lean Canvas','Financials','Business Plan','Tasks','Brand','Goals'];
+const VENTURE_OPTIONAL_MODULES = ['Lean Canvas','Ideas','Financials','Business Plan','Tasks','Brand','Goals'];
 const STAGE_DEFAULT_MODULES = {
-  incubating: ['Lean Canvas','Tasks','Goals'],
-  active: ['Financials','Business Plan','Tasks','Brand','Goals'],
+  incubating: ['Lean Canvas','Ideas','Tasks','Goals'],
+  active: ['Ideas','Financials','Business Plan','Tasks','Brand','Goals'],
 };
 
 const VENTURE_DATA = {
@@ -5737,9 +5741,148 @@ const BusinessPlanEditor = ({ storageKey, title }) => {
   );
 };
 
+const VentureIdeas = ({ venture }) => {
+  const IK = 'nylaos_ideas';
+  const [ideas, setIdeas] = useState(()=>JSON.parse(localStorage.getItem(IK)||'[]'));
+  const [showAdd, setShowAdd] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newContent, setNewContent] = useState('');
+  const linked = ideas.filter(i => i.businessArea===venture || (i.relatedBusinessIds||[]).includes(venture));
+
+  const addIdea = () => {
+    if(!newTitle.trim()) return;
+    const list = [{id:Date.now(),title:newTitle.trim(),content:newContent,category:'business',businessArea:venture,created:new Date().toISOString()}, ...ideas];
+    setIdeas(list); localStorage.setItem(IK, JSON.stringify(list));
+    setNewTitle(''); setNewContent(''); setShowAdd(false);
+    toast('Idea captured for '+venture,'success',1500);
+  };
+  const openIdea = idea => {
+    localStorage.setItem('nylaos_idea_open_request', String(idea.id));
+    if (window._navigateTo) window._navigateTo('ideas', null);
+  };
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>
+        <SectionHeading style={{marginBottom:0}}>Ideas for {venture}</SectionHeading>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>window._navigateTo && window._navigateTo('ideas', null)} style={{padding:'6px 14px',borderRadius:20,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11.5,cursor:'pointer'}}>Open Idea Bank</button>
+          <button onClick={()=>setShowAdd(true)} style={{padding:'6px 14px',borderRadius:20,background:C.rose,color:'#fff',border:'none',fontSize:11.5,cursor:'pointer'}}>+ New Idea</button>
+        </div>
+      </div>
+      {showAdd && (
+        <Card style={{marginBottom:14}}>
+          <InlineInput value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="Idea title..." style={{width:'100%',marginBottom:8}}/>
+          <TextArea value={newContent} onChange={e=>setNewContent(e.target.value)} placeholder="Details, notes, links..." height={80}/>
+          <div style={{display:'flex',gap:8,marginTop:10}}>
+            <button onClick={addIdea} style={{padding:'7px 16px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:12.5,cursor:'pointer'}}>Save</button>
+            <button onClick={()=>setShowAdd(false)} style={{padding:'7px 16px',borderRadius:10,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:12.5,cursor:'pointer'}}>Cancel</button>
+          </div>
+        </Card>
+      )}
+      {linked.length===0 && !showAdd && (
+        <div style={{fontSize:13,color:C.textMuted,fontStyle:'italic',padding:'20px 4px'}}>No ideas tagged to {venture} yet — capture one above, or tag an existing idea with this business in the Idea Bank.</div>
+      )}
+      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+        {linked.map(idea=>(
+          <Card key={idea.id} className="card-hover" style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>openIdea(idea)}>
+            <div style={{fontSize:13.5,fontWeight:500,color:C.text,marginBottom:idea.content?4:0}}>{idea.title}</div>
+            {idea.content && <div style={{fontSize:12,color:C.textLight,lineHeight:1.5,overflow:'hidden',maxHeight:40,whiteSpace:'pre-wrap'}}>{idea.content}</div>}
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const ventureDefaults = sub => VENTURE_DATA[sub] || { emoji:'💼', status:'Active', statusColor:C.rose, pillar:'Business', progress:0, description:'Your venture workspace.', mission:'', vision:'', offerings:[], stage: VENTURES.includes(sub) ? 'active' : 'incubating' };
 
-const BusinessPanel = ({ sub }) => {
+const BusinessOverviewDashboard = ({ onAddVenture, allVentures }) => {
+  const ideas = JSON.parse(localStorage.getItem('nylaos_ideas')||'[]');
+  const candidateIdeas = ideas.filter(i => i.category==='business' && i.status!=='archived' && !(i.businessArea && allVentures.includes(i.businessArea))).slice(0,6);
+
+  const ventureSummaries = allVentures.map(v => {
+    const ns = sanitize(v);
+    const vd = JSON.parse(localStorage.getItem(`nylaos_vd_${ns}`)||'null') || {};
+    const defaults = ventureDefaults(v);
+    const merged = {...defaults, ...vd};
+    const fin = JSON.parse(localStorage.getItem(`nylaos_finance_${ns}`)||'[]');
+    const revenue = fin.filter(e=>e.type==='income').reduce((s,e)=>s+e.amount,0);
+    const expenses = fin.filter(e=>e.type==='expense').reduce((s,e)=>s+e.amount,0);
+    return { name:v, ...merged, revenue, expenses };
+  });
+
+  const totalRevenue = ventureSummaries.reduce((s,v)=>s+v.revenue,0);
+  const totalExpenses = ventureSummaries.reduce((s,v)=>s+v.expenses,0);
+  const activeCount = ventureSummaries.filter(v=>(v.stage||'active')==='active').length;
+  const incubatingCount = ventureSummaries.length - activeCount;
+  const fmt = n=>'$'+n.toLocaleString('en',{minimumFractionDigits:0,maximumFractionDigits:0});
+  const statusColors = { Active:'#4CAF77', Planning:'#9080d8', Research:'#80b4dc', Launch:'#F4A261' };
+
+  return (
+    <div className="fade-in" style={{maxWidth:820}}>
+      <PageTitle>Business Overview</PageTitle>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
+        <Card style={{textAlign:'center'}}><div style={{fontSize:20,fontWeight:700,color:C.rose}}>{ventureSummaries.length}</div><div style={{fontSize:10,color:C.textMuted,textTransform:'uppercase'}}>Ventures</div></Card>
+        <Card style={{textAlign:'center'}}><div style={{fontSize:20,fontWeight:700,color:'#4CAF77'}}>{activeCount}</div><div style={{fontSize:10,color:C.textMuted,textTransform:'uppercase'}}>Active</div></Card>
+        <Card style={{textAlign:'center'}}><div style={{fontSize:20,fontWeight:700,color:'#9080d8'}}>{incubatingCount}</div><div style={{fontSize:10,color:C.textMuted,textTransform:'uppercase'}}>Incubating</div></Card>
+        <Card style={{textAlign:'center'}}><div style={{fontSize:20,fontWeight:700,color:totalRevenue-totalExpenses>=0?'#4CAF77':C.rose}}>{fmt(totalRevenue-totalExpenses)}</div><div style={{fontSize:10,color:C.textMuted,textTransform:'uppercase'}}>Net (all ventures)</div></Card>
+      </div>
+
+      <SectionHeading>Your Ventures</SectionHeading>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:26}}>
+        {ventureSummaries.map(v=>{
+          const sc = statusColors[v.status]||C.rose;
+          return (
+            <Card key={v.name} className="card-hover" style={{cursor:'pointer',padding:'14px 16px'}} onClick={()=>window._navigateTo && window._navigateTo('business', v.name)}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
+                <span style={{fontSize:20}}>{v.emoji}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13.5,fontWeight:600,color:C.text}}>{v.name}</div>
+                  <div style={{fontSize:10.5,color:C.textMuted}}>{v.pillar}</div>
+                </div>
+                <span style={{fontSize:9.5,fontWeight:600,padding:'2px 8px',borderRadius:10,background:(v.stage==='incubating'?`${C.accent}20`:`${sc}18`),color:v.stage==='incubating'?C.accent:sc}}>
+                  {v.stage==='incubating'?'🌱 Incubating':v.status}
+                </span>
+              </div>
+              <div style={{display:'flex',gap:14,fontSize:11,color:C.textMuted}}>
+                <span>Revenue <b style={{color:'#4CAF77'}}>{fmt(v.revenue)}</b></span>
+                <span>Net <b style={{color:v.revenue-v.expenses>=0?'#4CAF77':C.rose}}>{fmt(v.revenue-v.expenses)}</b></span>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+
+      {candidateIdeas.length>0 && (
+        <>
+          <SectionHeading>💡 Ideas That Could Become Ventures</SectionHeading>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {candidateIdeas.map(idea=>(
+              <Card key={idea.id} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:500,color:C.text}}>{idea.title}</div>
+                  {idea.content && <div style={{fontSize:11,color:C.textMuted,marginTop:2,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{idea.content}</div>}
+                </div>
+                <button onClick={()=>{
+                  const name = idea.businessArea || idea.title;
+                  if (!idea.businessArea) {
+                    const all = JSON.parse(localStorage.getItem('nylaos_ideas')||'[]');
+                    localStorage.setItem('nylaos_ideas', JSON.stringify(all.map(i=>i.id===idea.id?{...i,businessArea:name}:i)));
+                  }
+                  onAddVenture && onAddVenture(name);
+                  toast(`${name} added as an incubating venture 🌱`,'success',2500);
+                }} style={{padding:'6px 14px',borderRadius:20,background:C.rose,color:'#fff',border:'none',fontSize:11.5,cursor:'pointer',whiteSpace:'nowrap'}}>🚀 Turn into Venture</button>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const BusinessPanel = ({ sub, onAddVenture }) => {
   const [tab, setTab] = useState('Overview');
   useEffect(()=>setTab('Overview'),[sub]);
   const allVentures = [...VENTURES, ...JSON.parse(localStorage.getItem('nylaos_extra_ventures')||'[]')];
@@ -5767,6 +5910,7 @@ const BusinessPanel = ({ sub }) => {
   const enabledModules = vd.enabledModules || STAGE_DEFAULT_MODULES[stage];
   const tabs = ['Overview', ...VENTURE_OPTIONAL_MODULES.filter(m=>enabledModules.includes(m))];
   useEffect(() => { if (!tabs.includes(tab)) setTab('Overview'); }, [tabs.join('|')]);
+  if (sub === 'Overview') return <BusinessOverviewDashboard onAddVenture={onAddVenture} allVentures={allVentures} />;
   if (!isVenture) return <DefaultBizContent sub={sub} />;
   return (
     <div className="fade-in" style={{ maxWidth:740 }}>
@@ -5779,6 +5923,7 @@ const BusinessPanel = ({ sub }) => {
       </div>
       {tab==='Overview'      && <VentureOverview venture={sub} vd={vd} saveVd={saveVd} />}
       {tab==='Lean Canvas'   && <LeanCanvasEditor venture={sub} />}
+      {tab==='Ideas'         && <VentureIdeas venture={sub} />}
       {tab==='Financials'    && <FinanceTracker namespace={ns} />}
       {tab==='Business Plan' && <BusinessPlanEditor storageKey={`biz_plan_${ns}`} title={`${sub} — Business Plan`} />}
       {tab==='Tasks'         && <TasksPanel sub="Today's Tasks" storageKey={`nylaos_tasks_${ns}`} />}
@@ -8851,7 +8996,7 @@ const SettingsPanel = ({ sub }) => {
 };
 
 /* ── Router ─────────────────────────────────────────────────────── */
-const MainContent = ({ navId, sub, onRestoreBiz }) => (
+const MainContent = ({ navId, sub, onRestoreBiz, onAddVenture }) => (
   <div key={`${navId}__${sub}`} className="fade-in">
     {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:<FocusMode/>)}
     {navId==='calendar'   && (sub==='Event Planner'?<EventPlanner/>:<CalendarPanel sub={sub} />)}
@@ -8860,7 +9005,7 @@ const MainContent = ({ navId, sub, onRestoreBiz }) => (
     {navId==='ideas'      && <IdeaBank />}
     {navId==='notebook'   && <NotebookPanel sub={sub} />}
     {navId==='goals'      && (sub==='Dream Life'?<DreamLifeBlueprint/>:<GoalsPanel sub={sub} />)}
-    {navId==='business'   && (sub==='Recently Deleted'?<TrashPanel type="business" onRestoreBusiness={onRestoreBiz}/>:<BusinessPanel sub={sub} />)}
+    {navId==='business'   && (sub==='Recently Deleted'?<TrashPanel type="business" onRestoreBusiness={onRestoreBiz}/>:<BusinessPanel sub={sub} onAddVenture={onAddVenture} />)}
     {navId==='social'     && <SocialMediaPanel sub={sub} />}
     {navId==='cosmic'     && <CosmicPanel sub={sub} />}
     {navId==='university' && <UniversityPanel sub={sub} />}
@@ -9588,7 +9733,7 @@ const App = () => {
   const allActiveVentures = [...VENTURES, ...bizExtras].filter(b=>!trashedVentures.includes(b));
   const baseNav = NAV.find(n=>n.id===activeNav);
   const navItem = (activeNav==='business' && baseNav)
-    ? { ...baseNav, sub: [...allActiveVentures, 'Recently Deleted'] }
+    ? { ...baseNav, sub: ['Overview', ...allActiveVentures, 'Recently Deleted'] }
     : baseNav;
 
   const handleNavSelect = id => {
@@ -9624,7 +9769,7 @@ const App = () => {
           {isMobile && !isNotebook && (
             <MobileSubTabs navItem={navItem} activeSub={activeSub} onSubSelect={setActiveSub} />
           )}
-          <MainContent navId={activeNav} sub={activeSub} onRestoreBiz={restoreBiz} />
+          <MainContent navId={activeNav} sub={activeSub} onRestoreBiz={restoreBiz} onAddVenture={addBiz} />
         </main>
       </div>
       {isMobile && <MobileBottomNav activeNav={activeNav} onNavSelect={handleNavSelect} />}
