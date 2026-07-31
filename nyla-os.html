@@ -46,6 +46,12 @@
     .rich-editor hr { border:none; border-top:1px solid #f0d0dc; margin:14px 0; }
     .rich-editor a { color:#9080d8; text-decoration:underline; }
     .rich-editor code { background:#f8eef6; border-radius:4px; padding:1px 5px; font-family:'Courier New',monospace; font-size:13px; color:#c4607a; }
+    /* Agent Office — pulsing ring while an agent is thinking/working */
+    @keyframes agentPulse { 0% { box-shadow: 0 0 0 0 var(--pulse-color, rgba(66,133,244,0.5)); } 70% { box-shadow: 0 0 0 9px rgba(0,0,0,0); } 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); } }
+    .agent-pulse { animation: agentPulse 1.5s ease-out infinite; }
+    /* Motion tokens — applied to <html> based on the Appearance "Motion" setting */
+    html.motion-reduced *, html.motion-reduced *::before, html.motion-reduced *::after { animation-duration: 0.05s !important; transition-duration: 0.05s !important; }
+    html.motion-none *, html.motion-none *::before, html.motion-none *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   </style>
 </head>
 <body>
@@ -154,6 +160,7 @@ function _maybeApplyOrConflict(snapshot, savedAt, user, force){
   if(!force && _dirty){
     _pendingConflict={snapshot,savedAt,user};
     _setSyncState({status:'conflict',user});
+    if(typeof toast==='function') toast('Sync conflict — another device has changes. Click "Conflict" (top right) before editing more.','error',6000);
     return;
   }
   _applyCloudSnapshot(snapshot,savedAt,user);
@@ -186,6 +193,10 @@ function resolveConflictUseCloud(){
 
 async function cloudSave(){
   if(!_fbUser||!_fbDb) return;
+  // Never push while a conflict is unresolved — the local copy is known-stale relative to
+  // the cloud at this point, so an auto-save here would silently bury the other device's
+  // changes under stale data the instant this device makes any further edit.
+  if(_pendingConflict){ _setSyncState({status:'conflict',user:_fbUser}); return; }
   _setSyncState({status:'syncing',user:_fbUser});
   try{
     const snap={};
@@ -517,6 +528,31 @@ const useIsMobile = () => {
   } catch(e) {}
 })();
 
+/* ── Color math (shared by the theme generator & ColorWheelPicker) ─ */
+const hexToRgb = hex => { hex=(hex||'#000000').replace('#',''); if(hex.length===3) hex=hex.split('').map(c=>c+c).join(''); return {r:parseInt(hex.slice(0,2),16)||0, g:parseInt(hex.slice(2,4),16)||0, b:parseInt(hex.slice(4,6),16)||0}; };
+const rgbToHex = (r,g,b) => '#'+[r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+const mixHex = (hex1, hex2, weight) => {
+  const a = hexToRgb(hex1), b = hexToRgb(hex2);
+  return rgbToHex(a.r+(b.r-a.r)*weight, a.g+(b.g-a.g)*weight, a.b+(b.b-a.b)*weight);
+};
+const hsvToHex = (h, s, v) => {
+  s = Math.max(0,Math.min(1,s)); v = Math.max(0,Math.min(1,v)); h = ((h%360)+360)%360;
+  const c = v*s, x = c*(1-Math.abs((h/60)%2-1)), m = v-c;
+  let r=0,g=0,b=0;
+  if (h<60) [r,g,b]=[c,x,0]; else if (h<120) [r,g,b]=[x,c,0]; else if (h<180) [r,g,b]=[0,c,x];
+  else if (h<240) [r,g,b]=[0,x,c]; else if (h<300) [r,g,b]=[x,0,c]; else [r,g,b]=[c,0,x];
+  return rgbToHex((r+m)*255,(g+m)*255,(b+m)*255);
+};
+const hexToHsv = hex => {
+  const {r,g,b} = hexToRgb(hex);
+  const rf=r/255, gf=g/255, bf=b/255;
+  const max=Math.max(rf,gf,bf), min=Math.min(rf,gf,bf), d=max-min;
+  let h=0;
+  if (d!==0) { if(max===rf) h=60*(((gf-bf)/d)%6); else if(max===gf) h=60*((bf-rf)/d+2); else h=60*((rf-gf)/d+4); }
+  if (h<0) h+=360;
+  return { h, s: max===0?0:d/max, v: max };
+};
+
 /* ── Theme ──────────────────────────────────────────────────────── */
 const ACCENT_PALETTES = {
   pink:   { rose:'#c4607a', roseDark:'#a03c5a', pink:'#f2c4ce', pinkLight:'#fef0f5', accent:'#9080d8', lavender:'#d4c0f0', border:'#f0d0dc', gradA:'linear-gradient(135deg,#f2c4ce,#d4c0f0)' },
@@ -524,14 +560,32 @@ const ACCENT_PALETTES = {
   sage:   { rose:'#5a8a6e', roseDark:'#3d6b52', pink:'#b8d4c0', pinkLight:'#eef7f0', accent:'#7c5cbf', lavender:'#d0e4d8', border:'#c0d8c8', gradA:'linear-gradient(135deg,#b8d4c0,#d0c4f0)' },
   peach:  { rose:'#c4784a', roseDark:'#a05430', pink:'#f0c8a8', pinkLight:'#fef4ee', accent:'#9080d8', lavender:'#d8c8f0', border:'#f0d0b8', gradA:'linear-gradient(135deg,#f0c8a8,#d4c0f0)' },
 };
+// Formal theme-token generator — derives a full palette (same shape as ACCENT_PALETTES entries)
+// from just two base hex colors, so any color picked on the wheel becomes a complete theme.
+const deriveTheme = (primary, accent) => ({
+  rose: primary, roseDark: mixHex(primary,'#000000',0.24),
+  pink: mixHex(primary,'#ffffff',0.55), pinkLight: mixHex(primary,'#ffffff',0.92),
+  accent, lavender: mixHex(accent,'#ffffff',0.45),
+  border: mixHex(primary,'#ffffff',0.75),
+  gradA: `linear-gradient(135deg,${mixHex(primary,'#ffffff',0.55)},${mixHex(accent,'#ffffff',0.45)})`,
+});
 
 const _ap = JSON.parse(localStorage.getItem('nylaos_appearance') || '{}');
-const _pal = ACCENT_PALETTES[_ap.accent || 'pink'];
+const _pal = (_ap.accent === 'custom' && _ap.customPrimary && _ap.customAccent)
+  ? deriveTheme(_ap.customPrimary, _ap.customAccent)
+  : (ACCENT_PALETTES[_ap.accent] || ACCENT_PALETTES.pink);
 const _dk = !!_ap.darkMode;
 
 // Apply font zoom immediately before React renders
 if(_ap.fontSize === 'large')  document.documentElement.style.fontSize = '17px';
 if(_ap.fontSize === 'small')  document.documentElement.style.fontSize = '13px';
+
+// Density token — scales spacing across cards & layout via a CSS var, applied pre-render.
+const DENSITY_SCALE = { compact:0.8, comfortable:1, spacious:1.25 };
+document.documentElement.style.setProperty('--nyla-space', DENSITY_SCALE[_ap.density] ?? 1);
+
+// Motion token — toggles global transition/animation behavior via a class on <html>.
+if (_ap.motion && _ap.motion !== 'full') document.documentElement.classList.add(`motion-${_ap.motion}`);
 
 /* ── Colors ─────────────────────────────────────────────────────── */
 const C = {
@@ -566,14 +620,15 @@ const TAG_COLORS = {
 
 /* ── Nav ────────────────────────────────────────────────────────── */
 const NAV = [
-  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes'] },
+  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes','Brain Dump'] },
   { id:'calendar',   label:'Calendar',   sub:['Monthly','Daily','Weekly','Quarterly','Yearly','Event Planner','Recently Deleted'] },
-  { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Kanban','Eisenhower','Bucket List','Habits','Bored Bucket','Pros & Cons','Projects','Completed','Recently Deleted'] },
+  { id:'tasks',      label:'Tasks',      sub:["Today's Tasks",'Upcoming','Kanban','Eisenhower','Bucket List','Shopping List','Habits','Bored Bucket','Pros & Cons','Projects','Completed','Recently Deleted'] },
   { id:'period',     label:'Period',     sub:['Cycle Overview','Phase Log','Symptoms','Learn'] },
   { id:'ideas',      label:'Ideas',      sub:[] },
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'goals',      label:'Goals',      sub:['Yearly','Quarterly','Monthly','Dream Life','Recently Deleted'] },
   { id:'business',   label:'Business',   sub:['Lunar Love','Halo House Collective Co.','Love Sativa','Dropshipping'] },
+  { id:'social',     label:'Social Media', sub:['Overview','Accounts','Content Calendar','Recently Deleted'] },
   { id:'cosmic',     label:'Cosmic',     sub:['Numerology','Astrology','Matrix of Destiny'] },
   { id:'university', label:'University', sub:['Dashboard','Upload Syllabus','Courses','Assignments','GPA Calculator','Resources','Recently Deleted'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
@@ -751,6 +806,7 @@ const icons = {
   ideas:         `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"/><line x1="12" y1="17.77" x2="12" y2="22"/>`,
   notebook:      `<path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>`,
   business:      `<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/>`,
+  social:        `<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>`,
   cosmic:        `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>`,
   manifestation: `<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>`,
   university:    `<path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/>`,
@@ -773,7 +829,7 @@ const Ico = ({ d, size=22, active, stroke, fill='none' }) => (
 const Card = ({ children, style={}, onClick, className='' }) => (
   <div onClick={onClick} className={className} style={{
     background:C.card, border:`0.5px solid ${C.border}`,
-    borderRadius:16, padding:20, ...style,
+    borderRadius:16, padding:'calc(20px * var(--nyla-space, 1))', ...style,
   }}>{children}</div>
 );
 
@@ -824,6 +880,77 @@ const InlineInput = ({ value, onChange, placeholder, style={} }) => (
 const PageTitle = ({ children }) => (
   <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:21, color:C.rose, marginBottom:20 }}>{children}</div>
 );
+
+/* ── Color Wheel Picker ─────────────────────────────────────────────
+   Reusable anywhere a color can be changed: a hue/saturation wheel + brightness
+   slider + hex (#RRGGBB) field, replacing native <input type="color"> swatches. */
+const ColorWheelPicker = ({ value, onChange, size=140, trigger=null, align='left' }) => {
+  const [open, setOpen] = useState(false);
+  const hex = value || '#c4607a';
+  const [hexDraft, setHexDraft] = useState(hex);
+  useEffect(()=>{ setHexDraft(hex); }, [hex]);
+  const wheelRef = useRef(null);
+  const draggingRef = useRef(false);
+  const { h, s, v } = hexToHsv(hex);
+
+  const setFromPoint = (clientX, clientY) => {
+    const el = wheelRef.current; if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const R = rect.width/2;
+    const dx = clientX - (rect.left+R), dy = clientY - (rect.top+R);
+    let angle = Math.atan2(dy,dx) * 180/Math.PI; if (angle<0) angle += 360;
+    const dist = Math.min(1, Math.sqrt(dx*dx+dy*dy)/R);
+    onChange(hsvToHex(angle, dist, v));
+  };
+  const onPointerDown = e => {
+    draggingRef.current = true;
+    setFromPoint(e.clientX, e.clientY);
+    const move = e2 => { if (draggingRef.current) setFromPoint(e2.clientX, e2.clientY); };
+    const up = () => { draggingRef.current=false; window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const markerLeft = 50 + s*Math.cos(h*Math.PI/180)*50;
+  const markerTop  = 50 + s*Math.sin(h*Math.PI/180)*50;
+
+  return (
+    <div style={{ position:'relative', display:'inline-block' }}>
+      <span onClick={()=>setOpen(o=>!o)} style={{ cursor:'pointer', display:'inline-flex' }}>
+        {trigger ? trigger(hex) : (
+          <span style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px', borderRadius:20, border:`0.5px solid ${C.border}`, background:C.pinkLight }}>
+            <span style={{ width:16, height:16, borderRadius:'50%', background:hex, border:`0.5px solid ${C.border}`, flexShrink:0 }}/>
+            <span style={{ fontSize:11.5, color:C.text, fontFamily:'monospace' }}>{hex}</span>
+          </span>
+        )}
+      </span>
+      {open && (
+        <>
+          <div onClick={()=>setOpen(false)} style={{ position:'fixed', inset:0, zIndex:299 }}/>
+          <div onClick={e=>e.stopPropagation()} style={{ position:'absolute', top:'calc(100% + 6px)', [align]:0, zIndex:300,
+            background:C.card, border:`0.5px solid ${C.border}`, borderRadius:14, padding:14,
+            boxShadow:'0 10px 30px rgba(0,0,0,0.18)', width:size+28 }}>
+            <div ref={wheelRef} onPointerDown={onPointerDown}
+              style={{ width:size, height:size, borderRadius:'50%', margin:'0 auto', position:'relative', cursor:'crosshair', touchAction:'none',
+                background:'radial-gradient(circle at center, #fff, transparent 70%), conic-gradient(from 90deg, red, yellow, lime, cyan, blue, magenta, red)' }}>
+              <div style={{ position:'absolute', left:`${markerLeft}%`, top:`${markerTop}%`, width:14, height:14, borderRadius:'50%',
+                border:'2px solid #fff', boxShadow:'0 0 0 1px rgba(0,0,0,0.35)', background:hex, transform:'translate(-50%,-50%)', pointerEvents:'none' }}/>
+            </div>
+            <input type="range" min={0} max={100} value={Math.round(v*100)}
+              onChange={e=>onChange(hsvToHex(h, s, parseInt(e.target.value)/100))}
+              title="Brightness" style={{ width:'100%', marginTop:12, accentColor:hex }}/>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:10 }}>
+              <span style={{ width:18, height:18, borderRadius:5, background:hex, border:`0.5px solid ${C.border}`, flexShrink:0 }}/>
+              <input value={hexDraft} onChange={e=>{ let val=e.target.value; if(val&&!val.startsWith('#')) val='#'+val; setHexDraft(val); if(/^#[0-9a-fA-F]{6}$/.test(val)) onChange(val); }}
+                onBlur={()=>setHexDraft(hex)}
+                style={{ flex:1, minWidth:0, padding:'5px 8px', borderRadius:7, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:12, fontFamily:'monospace' }}/>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 /* ── Top Bar ────────────────────────────────────────────────────── */
 const SyncButton = () => {
@@ -1208,7 +1335,7 @@ const HomeOverview = () => {
             {affirmations.map((a,i)=>(
               <div key={i} style={{ display:'flex', gap:6, alignItems:'center' }}>
                 <input value={a} onChange={e=>{ const arr=[...affirmations]; arr[i]=e.target.value; saveAffirmations(arr); }}
-                  style={{ flex:1, padding:'6px 10px', borderRadius:8, border:`0.5px solid ${C.border}`, fontSize:13, background:'rgba(255,255,255,0.7)', color:C.rose, fontFamily:'inherit' }}/>
+                  style={{ flex:1, padding:'6px 10px', borderRadius:8, border:`0.5px solid ${C.border}`, fontSize:13, background:C.pinkLight, color:C.rose, fontFamily:'inherit' }}/>
                 <button onClick={()=>saveAffirmations(affirmations.filter((_,j)=>j!==i))}
                   style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:14, lineHeight:1 }}>✕</button>
               </div>
@@ -1736,7 +1863,7 @@ const TrashPanel = ({ type, onRestoreBusiness, onRestore }) => {
     refresh();
   };
   const handleDelete = id => { permanentDelete(id); refresh(); };
-  const typeLabel = { task:'Task', goal:'Goal', business:'Business', notebook_page:'Note', idea:'Idea', calendar_event:'Calendar Event', course:'Course', assignment:'Assignment', habit:'Habit', bucket_item:'Bucket List Item', project:'Project' };
+  const typeLabel = { task:'Task', goal:'Goal', business:'Business', notebook_page:'Note', idea:'Idea', calendar_event:'Calendar Event', course:'Course', assignment:'Assignment', habit:'Habit', bucket_item:'Bucket List Item', project:'Project', social_account:'Social Account', social_content:'Content Item' };
   return (
     <div className="fade-in" style={{ maxWidth:620 }}>
       <PageTitle>Recently Deleted</PageTitle>
@@ -2261,7 +2388,7 @@ const BoredBucket = () => {
               <div style={{marginTop:8}} onClick={e=>e.stopPropagation()}>
                 <textarea value={item.details||''} onChange={e=>updateDetails(item.id,e.target.value)}
                   placeholder="Add details, links, notes..."
-                  style={{width:'100%',height:60,padding:'8px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'rgba(255,255,255,0.5)',color:C.text,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
+                  style={{width:'100%',height:60,padding:'8px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit',resize:'none'}}/>
               </div>
             )}
           </div>
@@ -2337,6 +2464,181 @@ const VoiceNotes = () => {
             </div>
           </>
         )}
+      </Card>
+    </div>
+  );
+};
+
+/* ── Brain Dump ─────────────────────────────────────────────────────
+   Speak or type a messy stream of thoughts; Claude splits it into tasks,
+   calendar events, ideas, notes and a shopping list. Everything is shown
+   for review (with per-item toggles) before anything is actually saved. */
+const BRAIN_DUMP_CATS = [
+  { key:'tasks',    label:'Tasks',            emoji:'✅', color:'#4285f4', storeKey:'nylaos_tasks' },
+  { key:'events',   label:'Calendar Events',  emoji:'📅', color:'#9080d8', storeKey:'nylaos_events' },
+  { key:'ideas',    label:'Ideas',            emoji:'💡', color:'#F4A261', storeKey:'nylaos_ideas' },
+  { key:'notes',    label:'Notes',            emoji:'📝', color:'#5a8a6e', storeKey:'nylaos_nb_pages' },
+  { key:'shopping', label:'Shopping List',    emoji:'🛒', color:'#c4607a', storeKey:'nylaos_shopping_list' },
+];
+
+const BrainDump = () => {
+  const [text, setText] = useState('');
+  const [recording, setRecording] = useState(false);
+  const recRef = useRef(null);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [checked, setChecked] = useState({});
+
+  const startRecording = () => {
+    if(!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)){
+      toast('Speech recognition not supported in this browser','error'); return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+    const base = text ? text+' ' : '';
+    let final = '';
+    rec.onresult = e => {
+      let interim = '';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        if(e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
+        else interim += e.results[i][0].transcript;
+      }
+      setText(base + final + interim);
+    };
+    rec.onerror = e => { setRecording(false); };
+    rec.onend = () => { if(recording) rec.start(); };
+    rec.start();
+    recRef.current = rec;
+    setRecording(true);
+  };
+  const stopRecording = () => {
+    if(recRef.current){ recRef.current.onend=null; recRef.current.stop(); }
+    setRecording(false);
+  };
+
+  const analyze = async () => {
+    if(!text.trim()) return;
+    const key = localStorage.getItem('nylaos_api_key');
+    if(!key){ toast('Add your API key in Settings → API Keys first','error'); return; }
+    setLoading(true);
+    try {
+      const sys = `You are a brain-dump triage assistant. The user gives you a messy, unstructured stream of thoughts (typed or spoken). Split it into distinct items and reply with STRICT JSON only — no markdown fences, no commentary — in exactly this shape:
+{"tasks":[{"text":""}],"events":[{"text":"","date":"YYYY-MM-DD","location":""}],"ideas":[{"title":"","content":""}],"notes":[{"title":"","content":""}],"shopping":[{"text":""}]}
+Today's date is ${toDateKey()}. Resolve relative dates ("next Tuesday", "tomorrow") into real YYYY-MM-DD dates. Only include a category's array if it actually has items — otherwise return an empty array for it. Don't invent anything that wasn't said.`;
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body: JSON.stringify({ model:'claude-sonnet-4-5', max_tokens:1500, system:sys, messages:[{role:'user',content:text}] }),
+      });
+      const data = await res.json();
+      const raw = data.content?.[0]?.text || '{}';
+      const match = raw.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : raw);
+      const totalItems = BRAIN_DUMP_CATS.reduce((s,c)=>s+(parsed[c.key]||[]).length,0);
+      if (totalItems === 0) { toast('Nothing clear enough to sort — try adding more detail','error'); setLoading(false); return; }
+      setResult(parsed);
+      const chk = {};
+      BRAIN_DUMP_CATS.forEach(c => (parsed[c.key]||[]).forEach((_,i)=>chk[`${c.key}_${i}`]=true));
+      setChecked(chk);
+    } catch(e) {
+      toast('Could not process that — check your API key in Settings','error');
+    } finally { setLoading(false); }
+  };
+
+  const toggle = k => setChecked(c=>({...c,[k]:!c[k]}));
+
+  const confirmAndSave = () => {
+    let added = 0;
+    const summaryLines = [];
+
+    const tasks = JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
+    (result.tasks||[]).forEach((t,i)=>{ if(checked[`tasks_${i}`]){ tasks.push({id:Date.now()+Math.random(),text:t.text,done:false,created:new Date().toISOString()}); added++; summaryLines.push(`<li>✅ ${t.text}</li>`); }});
+    localStorage.setItem('nylaos_tasks', JSON.stringify(tasks));
+
+    const events = JSON.parse(localStorage.getItem('nylaos_events')||'[]');
+    (result.events||[]).forEach((e,i)=>{ if(checked[`events_${i}`]){ const txt=e.location?`${e.text} @ ${e.location}`:e.text; events.push({id:Date.now()+Math.random(),date:e.date||toDateKey(),text:txt}); added++; summaryLines.push(`<li>📅 ${txt} — ${e.date||toDateKey()}</li>`); }});
+    localStorage.setItem('nylaos_events', JSON.stringify(events));
+
+    const ideas = JSON.parse(localStorage.getItem('nylaos_ideas')||'[]');
+    (result.ideas||[]).forEach((idea,i)=>{ if(checked[`ideas_${i}`]){ ideas.push({id:Date.now()+Math.random(),title:idea.title,content:idea.content||'',category:'personal',created:new Date().toISOString()}); added++; summaryLines.push(`<li>💡 ${idea.title}</li>`); }});
+    localStorage.setItem('nylaos_ideas', JSON.stringify(ideas));
+
+    const shopping = JSON.parse(localStorage.getItem('nylaos_shopping_list')||'[]');
+    (result.shopping||[]).forEach((s,i)=>{ if(checked[`shopping_${i}`]){ shopping.push({id:Date.now()+Math.random(),text:s.text,done:false,created:new Date().toISOString()}); added++; summaryLines.push(`<li>🛒 ${s.text}</li>`); }});
+    localStorage.setItem('nylaos_shopping_list', JSON.stringify(shopping));
+
+    const pages = JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
+    (result.notes||[]).forEach((n,i)=>{ if(checked[`notes_${i}`]){
+      const name = n.title || ('Brain Dump · '+new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+      pages.push({id:Date.now()+Math.random(),name,folderId:1,content:`<p>${(n.content||'').replace(/\n/g,'</p><p>')}</p>`,created:new Date().toISOString(),updated:new Date().toISOString()});
+      added++; summaryLines.push(`<li>📝 ${name}</li>`);
+    }});
+    localStorage.setItem('nylaos_nb_pages', JSON.stringify(pages));
+
+    const dateLabel = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+    downloadAsMarkdown(`Brain Dump — ${dateLabel}`, `<h2>Sorted into ${added} item(s)</h2><ul>${summaryLines.join('')}</ul>`);
+    toast(`Sorted into ${added} item(s) ✦`,'success',2500);
+    setResult(null); setChecked({}); setText('');
+  };
+
+  if (result) {
+    return (
+      <div className="fade-in" style={{ maxWidth:600 }}>
+        <PageTitle>Review Your Brain Dump</PageTitle>
+        {BRAIN_DUMP_CATS.map(cat => {
+          const items = result[cat.key]||[];
+          if (!items.length) return null;
+          return (
+            <Card key={cat.key} style={{ marginBottom:14 }}>
+              <SectionHeading style={{ color:cat.color }}>{cat.emoji} {cat.label}</SectionHeading>
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                {items.map((item,i)=>{
+                  const k = `${cat.key}_${i}`;
+                  const label = cat.key==='events' ? `${item.text}${item.date?` — ${item.date}`:''}` : (item.title || item.text);
+                  return (
+                    <label key={k} style={{ display:'flex', alignItems:'flex-start', gap:10, cursor:'pointer', opacity:checked[k]?1:0.45 }}>
+                      <Checkbox checked={!!checked[k]} onChange={()=>toggle(k)} size={18}/>
+                      <div>
+                        <div style={{ fontSize:13, color:C.text }}>{label}</div>
+                        {(item.content) && <div style={{ fontSize:11.5, color:C.textMuted, marginTop:2 }}>{item.content}</div>}
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })}
+        <div style={{ display:'flex', gap:10 }}>
+          <button onClick={confirmAndSave} style={{ padding:'10px 24px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:'pointer' }}>Save Selected & Download Summary</button>
+          <button onClick={()=>{setResult(null);setChecked({});}} style={{ padding:'10px 24px', borderRadius:12, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13.5, cursor:'pointer' }}>Start Over</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fade-in" style={{ maxWidth:560 }}>
+      <PageTitle>Brain Dump</PageTitle>
+      <div style={{ fontSize:13, color:C.textMuted, marginBottom:16, lineHeight:1.6 }}>Speak or type everything that's on your mind — tasks, appointments, ideas, notes, things to buy. It'll get sorted into the right places for you to review before anything saves.</div>
+      <Card>
+        <div style={{ display:'flex', gap:10, alignItems:'flex-start', marginBottom:12 }}>
+          <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="Everything on your mind, all at once..."
+            style={{ flex:1, height:160, resize:'none', border:`0.5px solid ${C.border}`, borderRadius:12, padding:'12px 14px', fontSize:13.5, lineHeight:1.7, color:C.text, background:C.pinkLight, fontFamily:'inherit' }}/>
+          <button onClick={recording?stopRecording:startRecording} title={recording?'Stop recording':'Speak instead'}
+            style={{ width:52, height:52, borderRadius:'50%', border:'none', cursor:'pointer', flexShrink:0,
+              background:recording?'#ea4335':C.rose, color:'#fff', fontSize:20,
+              boxShadow:recording?'0 0 0 6px #ea433530':`0 4px 14px ${C.rose}50`, animation:recording?'checkPop 1s ease infinite':'none' }}>
+            {recording?'⏹':'🎙'}
+          </button>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <button onClick={analyze} disabled={loading||!text.trim()} style={{ padding:'10px 24px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:loading?'default':'pointer', opacity:loading||!text.trim()?0.6:1 }}>
+            {loading?'Sorting...':'Sort It Out ✦'}
+          </button>
+          {text && <button onClick={()=>setText('')} style={{ padding:'10px 20px', borderRadius:12, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13.5, cursor:'pointer' }}>Clear</button>}
+        </div>
       </Card>
     </div>
   );
@@ -3286,7 +3588,7 @@ const IdeaBank = () => {
             style={{width:140,padding:'5px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit'}}/>
           <div style={{display:'flex',gap:4}}>
             {CAT_COLORS.map(clr=>(
-              <button key={clr} onClick={()=>setNewCatColor(clr)} style={{width:18,height:18,borderRadius:'50%',background:clr,border:newCatColor===clr?'2px solid #fff':'2px solid transparent',cursor:'pointer',boxShadow:newCatColor===clr?`0 0 0 1.5px ${clr}`:'none'}}/>
+              <button key={clr} onClick={()=>setNewCatColor(clr)} style={{width:18,height:18,borderRadius:'50%',background:clr,border:newCatColor===clr?`2px solid ${C.card}`:'2px solid transparent',cursor:'pointer',boxShadow:newCatColor===clr?`0 0 0 1.5px ${clr}`:'none'}}/>
             ))}
           </div>
           <button onClick={addCategory} style={{padding:'5px 14px',borderRadius:8,background:C.rose,color:'#fff',border:'none',fontSize:11,cursor:'pointer'}}>Add</button>
@@ -3615,6 +3917,8 @@ const NotebookPanel = ({ sub }) => {
   const [headerTitle, setHeaderTitle] = useState('');
   const [headerEditing, setHeaderEditing] = useState(false);
   const [fmt, setFmt] = useState({bold:false,italic:false,underline:false,strike:false});
+  const [customTextColor, setCustomTextColor] = useState('#c4607a');
+  const [customHiliteColor, setCustomHiliteColor] = useState('#fce4ec');
   const [nbFileLinked, setNbFileLinked] = useState(()=>!!window._nbFileHandle);
   const editorDomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -4143,7 +4447,7 @@ const NotebookPanel = ({ sub }) => {
   );
   const Sep = () => <div style={{width:1,height:18,background:C.border,flexShrink:0,margin:'0 2px'}}/>;
 
-  const panelBg = '#faf4f8';
+  const panelBg = C.secondaryBg;
   return (
     <div className="fade-in" style={{display:'flex',height:'calc(100vh - 60px)',overflow:'hidden',borderTop:`0.5px solid ${C.border}`}}>
 
@@ -4448,10 +4752,10 @@ const NotebookPanel = ({ sub }) => {
                   <button key={col} onMouseDown={e=>{e.preventDefault();exec('foreColor',col);}} title={col}
                     style={{width:18,height:18,borderRadius:4,background:col,border:`1.5px solid #fff`,cursor:'pointer',flexShrink:0,boxShadow:'0 0 0 0.5px #d0b0c040'}}/>
                 ))}
-                <label title="Custom text color" style={{cursor:'pointer',display:'flex',alignItems:'center'}}>
-                  <div style={{width:18,height:18,borderRadius:4,background:'linear-gradient(135deg,#c4607a,#9080d8,#5aab8c)',border:'1.5px solid #fff',cursor:'pointer',flexShrink:0,boxShadow:'0 0 0 0.5px #d0b0c040'}}/>
-                  <input type="color" onChange={e=>exec('foreColor',e.target.value)} style={{width:0,height:0,opacity:0,position:'absolute'}}/>
-                </label>
+                <ColorWheelPicker value={customTextColor} onChange={col=>{ setCustomTextColor(col); exec('foreColor',col); }}
+                  trigger={c=>(
+                    <div title="Custom text color" style={{width:18,height:18,borderRadius:4,background:'linear-gradient(135deg,#c4607a,#9080d8,#5aab8c)',border:'1.5px solid #fff',cursor:'pointer',flexShrink:0,boxShadow:`0 0 0 0.5px #d0b0c040, inset 0 0 0 5px ${c}`}}/>
+                  )}/>
               </div>
               <div style={{width:1,height:18,background:C.border,flexShrink:0}}/>
               {/* Highlight swatches */}
@@ -4461,10 +4765,10 @@ const NotebookPanel = ({ sub }) => {
                   <button key={col} onMouseDown={e=>{e.preventDefault();exec('hiliteColor',col);}} title={name}
                     style={{width:18,height:18,borderRadius:4,background:col==='transparent'?'#fff':col,border:`1.5px solid ${col==='transparent'?C.border:'#fff'}`,cursor:'pointer',flexShrink:0,boxShadow:'0 0 0 0.5px #d0b0c040',fontSize:10,display:'flex',alignItems:'center',justifyContent:'center',color:C.textMuted}}>{col==='transparent'?'✕':''}</button>
                 ))}
-                <label title="Custom highlight color" style={{cursor:'pointer',display:'flex',alignItems:'center'}}>
-                  <div style={{width:18,height:18,borderRadius:4,background:'linear-gradient(135deg,#fce4ec,#fff9c4,#e8f5e9)',border:'1.5px solid #fff',cursor:'pointer',flexShrink:0,boxShadow:'0 0 0 0.5px #d0b0c040'}}/>
-                  <input type="color" onChange={e=>exec('hiliteColor',e.target.value)} style={{width:0,height:0,opacity:0,position:'absolute'}}/>
-                </label>
+                <ColorWheelPicker value={customHiliteColor} onChange={col=>{ setCustomHiliteColor(col); exec('hiliteColor',col); }}
+                  trigger={c=>(
+                    <div title="Custom highlight color" style={{width:18,height:18,borderRadius:4,background:'linear-gradient(135deg,#fce4ec,#fff9c4,#e8f5e9)',border:'1.5px solid #fff',cursor:'pointer',flexShrink:0,boxShadow:`0 0 0 0.5px #d0b0c040, inset 0 0 0 5px ${c}`}}/>
+                  )}/>
               </div>
             </div>
 
@@ -4819,7 +5123,11 @@ const VENTURES = [
   'Mommy & Me Fitness',
   'Love Nyla',
 ];
-const VENTURE_TABS = ['Overview','Financials','Business Plan','Tasks','Brand','Goals'];
+const VENTURE_OPTIONAL_MODULES = ['Lean Canvas','Financials','Business Plan','Tasks','Brand','Goals'];
+const STAGE_DEFAULT_MODULES = {
+  incubating: ['Lean Canvas','Tasks','Goals'],
+  active: ['Financials','Business Plan','Tasks','Brand','Goals'],
+};
 
 const VENTURE_DATA = {
   'Lunar Love': {
@@ -4991,28 +5299,96 @@ const BrandPanel = ({ venture }) => {
   );
 };
 
-const VentureOverview = ({ venture }) => {
+const LEAN_CANVAS_BLOCKS = [
+  { key:'problem',   label:'Problem',                  hint:'Top 3 problems worth solving',                                    area:'problem' },
+  { key:'solution',  label:'Solution',                  hint:'Top 3 features that solve them',                                  area:'solution' },
+  { key:'metrics',   label:'Key Metrics',               hint:'Numbers that tell you how the business is doing',                area:'metrics' },
+  { key:'uvp',       label:'Unique Value Proposition',  hint:'Single, clear message on why you\'re different & worth it',       area:'uvp', highlight:true },
+  { key:'advantage', label:'Unfair Advantage',          hint:'Something that can\'t be easily copied or bought',                area:'advantage' },
+  { key:'channels',  label:'Channels',                  hint:'Path to customers',                                               area:'channels' },
+  { key:'segments',  label:'Customer Segments',         hint:'Target customers & early adopters',                               area:'segments' },
+  { key:'costs',     label:'Cost Structure',             hint:'Acquisition, distribution, hosting, people...',                  area:'costs' },
+  { key:'revenue',   label:'Revenue Streams',            hint:'Revenue model, lifetime value, gross margin',                    area:'revenue' },
+];
+
+const LeanCanvasEditor = ({ venture }) => {
+  const key = `nylaos_leancanvas_${sanitize(venture)}`;
+  const [canvas, setCanvas] = useState(()=>JSON.parse(localStorage.getItem(key)||'{}'));
+  const save = (field, value) => {
+    setCanvas(prev => { const updated = {...prev, [field]:value}; localStorage.setItem(key, JSON.stringify(updated)); return updated; });
+  };
+  const exportContent = LEAN_CANVAS_BLOCKS.map(b=>`<h3>${b.label}</h3><p>${(canvas[b.key]||'').replace(/\n/g,'<br/>')||'<br/>'}</p>`).join('');
+
+  const Block = ({ b }) => (
+    <div style={{ gridArea:b.area, background: b.highlight ? `${C.rose}12` : C.card, border:`0.5px solid ${b.highlight?C.rose:C.border}`, borderRadius:12, padding:'10px 12px', display:'flex', flexDirection:'column', minHeight:0, overflow:'hidden' }}>
+      <div style={{ fontSize:11.5, fontWeight:600, color:b.highlight?C.rose:C.textLight, marginBottom:2 }}>{b.label}</div>
+      <div style={{ fontSize:9.5, color:C.textMuted, marginBottom:6, lineHeight:1.4 }}>{b.hint}</div>
+      <textarea value={canvas[b.key]||''} onChange={e=>save(b.key, e.target.value)}
+        style={{ flex:1, width:'100%', resize:'none', border:'none', background:'transparent', fontSize:12.5, lineHeight:1.6, color:C.text, fontFamily:'inherit', outline:'none' }}/>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+        <SectionHeading style={{ marginBottom:0 }}>Lean Canvas</SectionHeading>
+        <ExportMenu title={`${venture} — Lean Canvas`} content={exportContent} meta={new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} />
+      </div>
+      <div style={{ overflowX:'auto' }}>
+        <div style={{
+          display:'grid', minWidth:760,
+          gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr',
+          gridTemplateRows:'170px 170px 120px',
+          gridTemplateAreas:
+            `"problem solution uvp advantage segments"
+             "problem metrics  uvp channels  segments"
+             "costs   costs    costs revenue revenue"`,
+          gap:8,
+        }}>
+          {LEAN_CANVAS_BLOCKS.map(b=><Block key={b.key} b={b} />)}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ModuleManager = ({ modules, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const toggle = m => {
+    const on = modules.includes(m);
+    onChange(on ? modules.filter(x=>x!==m) : [...modules, m]);
+  };
+  return (
+    <div style={{ position:'relative' }}>
+      <button onClick={()=>setOpen(o=>!o)} title="Manage modules for this venture"
+        style={{ width:30, height:30, borderRadius:'50%', border:`0.5px solid ${C.border}`, background:open?C.pink:'transparent', color:C.textLight, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+        <Ico d={icons.settings} size={15} />
+      </button>
+      {open && (
+        <>
+          <div onClick={()=>setOpen(false)} style={{ position:'fixed', inset:0, zIndex:9 }}/>
+          <div style={{ position:'absolute', top:36, right:0, zIndex:10, background:C.card, border:`0.5px solid ${C.border}`, borderRadius:12, padding:10, minWidth:210, boxShadow:'0 8px 24px rgba(0,0,0,0.15)' }}>
+            <div style={{ fontSize:10.5, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:0.4, marginBottom:6, padding:'0 4px' }}>Modules for this venture</div>
+            {VENTURE_OPTIONAL_MODULES.map(m=>(
+              <label key={m} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 4px', cursor:'pointer', fontSize:12.5, color:C.text }}>
+                <Checkbox checked={modules.includes(m)} onChange={()=>toggle(m)} size={16}/>
+                {m}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const VentureOverview = ({ venture, vd, saveVd }) => {
   const notesKey = `nylaos_venture_overview_${sanitize(venture)}`;
-  const vdKey = `nylaos_vd_${sanitize(venture)}`;
   const ns = sanitize(venture);
 
-  const defaults = VENTURE_DATA[venture] || { emoji:'💼', status:'Active', statusColor:C.rose, pillar:'Business', progress:0, description:'Your venture workspace.', mission:'', vision:'', offerings:[] };
-
-  // Load saved edits merged over defaults
-  const [vd, setVd] = useState(() => {
-    const saved = JSON.parse(localStorage.getItem(vdKey)||'null');
-    return saved ? {...defaults, ...saved} : {...defaults};
-  });
   const [notes, setNotes] = useState(()=>localStorage.getItem(notesKey)||'');
   const [editingOffering, setEditingOffering] = useState(null);
-
-  const saveVd = (field, value) => {
-    setVd(prev => {
-      const updated = {...prev, [field]:value};
-      localStorage.setItem(vdKey, JSON.stringify(updated));
-      return updated;
-    });
-  };
+  const stage = vd.stage || 'active';
 
   const finEntries = JSON.parse(localStorage.getItem(`nylaos_finance_${ns}`)||'[]');
   const tasks = JSON.parse(localStorage.getItem(`nylaos_tasks_${ns}`)||'[]');
@@ -5035,6 +5411,18 @@ const VentureOverview = ({ venture }) => {
 
   return (
     <div>
+      {stage === 'incubating' && (
+        <Card style={{ marginBottom:14, background:`${C.lavender}30`, display:'flex', alignItems:'center', justifyContent:'space-between', gap:14, flexWrap:'wrap' }}>
+          <div style={{ minWidth:200 }}>
+            <div style={{ fontSize:12.5, fontWeight:600, color:C.rose, marginBottom:2 }}>🌱 Incubating Venture</div>
+            <div style={{ fontSize:11.5, color:C.textLight, lineHeight:1.5 }}>This is an early-stage idea. Fill out the Lean Canvas to validate it, then graduate to unlock Financials, Business Plan & Brand tools.</div>
+          </div>
+          <button onClick={()=>saveVd('stage','active')}
+            style={{ flexShrink:0, padding:'8px 16px', borderRadius:20, background:C.rose, color:'#fff', border:'none', cursor:'pointer', fontSize:12.5, fontWeight:600, fontFamily:'inherit', whiteSpace:'nowrap' }}>
+            Graduate to Active Venture →
+          </button>
+        </Card>
+      )}
       {/* Header hero card */}
       <Card style={{ background:`linear-gradient(135deg,${C.pink}35,${C.lavender}35)`, marginBottom:14 }}>
         <div style={{ display:'flex', alignItems:'flex-start', gap:14 }}>
@@ -5086,7 +5474,7 @@ const VentureOverview = ({ venture }) => {
             {label:'Expenses', value:fmt(expenses), color:C.rose},
             {label:'Net', value:fmt(revenue-expenses), color:revenue-expenses>=0?'#4CAF77':C.rose},
           ].map(({label,value,color})=>(
-            <div key={label} style={{ background:'rgba(255,255,255,0.65)', borderRadius:10, padding:'10px 12px', textAlign:'center' }}>
+            <div key={label} style={{ background:C.card, borderRadius:10, padding:'10px 12px', textAlign:'center' }}>
               <div style={{ fontSize:9.5, color:C.textMuted, marginBottom:2 }}>{label}</div>
               <div style={{ fontSize:13.5, fontWeight:600, color }}>{value}</div>
             </div>
@@ -5194,6 +5582,8 @@ const BusinessPlanEditor = ({ storageKey, title }) => {
   const KEY = `nylaos_note_${storageKey}`;
   const [content, setContent] = useState(()=>localStorage.getItem(KEY)||'');
   const [fmt, setFmt] = useState({bold:false,italic:false,underline:false,strike:false});
+  const [customTextColor, setCustomTextColor] = useState('#401828');
+  const [customHiliteColor, setCustomHiliteColor] = useState('#f2c4ce');
   const editorRef = useRef(null);
 
   useEffect(()=>{
@@ -5210,7 +5600,7 @@ const BusinessPlanEditor = ({ storageKey, title }) => {
   };
 
   const wc = content.replace(/<[^>]+>/g,' ').split(/\s+/).filter(Boolean).length;
-  const panelBg = '#faf4f8';
+  const panelBg = C.secondaryBg;
 
   const TBtn = ({cmd,val=null,label,title:t,active,style:s={}}) => (
     <button onMouseDown={e=>{e.preventDefault();exec(cmd,val);}} title={t||label}
@@ -5262,12 +5652,14 @@ const BusinessPlanEditor = ({ storageKey, title }) => {
           <option value="4">L</option><option value="5">XL</option><option value="6">2X</option><option value="7">3X</option>
         </select>
         <Sep/>
-        <label title="Text color" style={{display:'flex',alignItems:'center',gap:2,cursor:'pointer',fontSize:11,color:C.textMuted}}>
-          A<input type="color" defaultValue="#401828" onChange={e=>exec('foreColor',e.target.value)} style={{width:20,height:20,borderRadius:4,border:`0.5px solid ${C.border}`,cursor:'pointer',padding:1}}/>
-        </label>
-        <label title="Highlight" style={{display:'flex',alignItems:'center',gap:2,cursor:'pointer',fontSize:11,color:C.textMuted}}>
-          ▌<input type="color" defaultValue="#f2c4ce" onChange={e=>exec('hiliteColor',e.target.value)} style={{width:20,height:20,borderRadius:4,border:`0.5px solid ${C.border}`,cursor:'pointer',padding:1}}/>
-        </label>
+        <div style={{display:'flex',alignItems:'center',gap:3,fontSize:11,color:C.textMuted}}>
+          A<ColorWheelPicker value={customTextColor} onChange={col=>{ setCustomTextColor(col); exec('foreColor',col); }}
+            trigger={c=>(<div title="Text color" style={{width:20,height:20,borderRadius:4,background:c,border:`0.5px solid ${C.border}`,cursor:'pointer'}}/>)}/>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:3,fontSize:11,color:C.textMuted}}>
+          ▌<ColorWheelPicker value={customHiliteColor} onChange={col=>{ setCustomHiliteColor(col); exec('hiliteColor',col); }}
+            trigger={c=>(<div title="Highlight" style={{width:20,height:20,borderRadius:4,background:c,border:`0.5px solid ${C.border}`,cursor:'pointer'}}/>)}/>
+        </div>
         <Sep/>
         <button onMouseDown={e=>{e.preventDefault();exec('insertUnorderedList');}} title="Bullets" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.text,fontSize:14}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>•</button>
         <button onMouseDown={e=>{e.preventDefault();exec('insertOrderedList');}} title="Numbered" style={{padding:'3px 7px',borderRadius:6,border:'none',cursor:'pointer',background:'transparent',color:C.text,fontSize:12}} onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>1.</button>
@@ -5288,20 +5680,48 @@ const BusinessPlanEditor = ({ storageKey, title }) => {
   );
 };
 
+const ventureDefaults = sub => VENTURE_DATA[sub] || { emoji:'💼', status:'Active', statusColor:C.rose, pillar:'Business', progress:0, description:'Your venture workspace.', mission:'', vision:'', offerings:[], stage: VENTURES.includes(sub) ? 'active' : 'incubating' };
+
 const BusinessPanel = ({ sub }) => {
   const [tab, setTab] = useState('Overview');
   useEffect(()=>setTab('Overview'),[sub]);
   const allVentures = [...VENTURES, ...JSON.parse(localStorage.getItem('nylaos_extra_ventures')||'[]')];
   const isVenture = allVentures.includes(sub);
-  if (!isVenture) return <DefaultBizContent sub={sub} />;
   const ns = sanitize(sub);
+  const vdKey = `nylaos_vd_${ns}`;
+  const [vd, setVd] = useState(() => {
+    const saved = JSON.parse(localStorage.getItem(vdKey)||'null');
+    const d = ventureDefaults(sub);
+    return saved ? {...d, ...saved} : {...d};
+  });
+  useEffect(() => {
+    const saved = JSON.parse(localStorage.getItem(`nylaos_vd_${sanitize(sub)}`)||'null');
+    const d = ventureDefaults(sub);
+    setVd(saved ? {...d, ...saved} : {...d});
+  }, [sub]);
+  const saveVd = (field, value) => {
+    setVd(prev => {
+      const updated = {...prev, [field]:value};
+      localStorage.setItem(vdKey, JSON.stringify(updated));
+      return updated;
+    });
+  };
+  const stage = vd.stage || 'active';
+  const enabledModules = vd.enabledModules || STAGE_DEFAULT_MODULES[stage];
+  const tabs = ['Overview', ...VENTURE_OPTIONAL_MODULES.filter(m=>enabledModules.includes(m))];
+  useEffect(() => { if (!tabs.includes(tab)) setTab('Overview'); }, [tabs.join('|')]);
+  if (!isVenture) return <DefaultBizContent sub={sub} />;
   return (
     <div className="fade-in" style={{ maxWidth:740 }}>
       <PageTitle>{sub}</PageTitle>
-      <div style={{ display:'flex', gap:6, marginBottom:20, flexWrap:'wrap' }}>
-        {VENTURE_TABS.map(t=><Pill key={t} active={tab===t} onClick={()=>setTab(t)}>{t}</Pill>)}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:20, flexWrap:'wrap' }}>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+          {tabs.map(t=><Pill key={t} active={tab===t} onClick={()=>setTab(t)}>{t}</Pill>)}
+        </div>
+        <ModuleManager modules={enabledModules} onChange={next=>saveVd('enabledModules', next)} />
       </div>
-      {tab==='Overview'      && <VentureOverview venture={sub} />}
+      {tab==='Overview'      && <VentureOverview venture={sub} vd={vd} saveVd={saveVd} />}
+      {tab==='Lean Canvas'   && <LeanCanvasEditor venture={sub} />}
       {tab==='Financials'    && <FinanceTracker namespace={ns} />}
       {tab==='Business Plan' && <BusinessPlanEditor storageKey={`biz_plan_${ns}`} title={`${sub} — Business Plan`} />}
       {tab==='Tasks'         && <TasksPanel sub="Today's Tasks" storageKey={`nylaos_tasks_${ns}`} />}
@@ -5309,6 +5729,299 @@ const BusinessPanel = ({ sub }) => {
       {tab==='Goals'         && <GoalsPanel sub="All Goals" />}
     </div>
   );
+};
+
+/* ── Social Media Tracker ──────────────────────────────────────────── */
+const SOCIAL_PLATFORMS = [
+  { id:'instagram', label:'Instagram',   emoji:'📷', color:'#C13584' },
+  { id:'tiktok',    label:'TikTok',      emoji:'🎵', color:'#25252c' },
+  { id:'youtube',   label:'YouTube',     emoji:'▶️', color:'#e53935' },
+  { id:'pinterest', label:'Pinterest',   emoji:'📌', color:'#e60023' },
+  { id:'twitter',   label:'X / Twitter', emoji:'✦',  color:'#25252c' },
+  { id:'facebook',  label:'Facebook',    emoji:'📘', color:'#1877f2' },
+  { id:'linkedin',  label:'LinkedIn',    emoji:'💼', color:'#0a66c2' },
+  { id:'threads',   label:'Threads',     emoji:'@',  color:'#25252c' },
+];
+const platformInfo = id => SOCIAL_PLATFORMS.find(p=>p.id===id) || { label:id||'Other', emoji:'✦', color:C.textMuted };
+
+const CONTENT_STATUSES = [
+  { id:'Idea',      color:'#9080d8' },
+  { id:'Scheduled', color:'#F4A261' },
+  { id:'Posted',    color:'#4CAF77' },
+];
+
+const SOCIAL_ACCOUNTS_KEY = 'nylaos_social_accounts';
+const SOCIAL_CONTENT_KEY  = 'nylaos_social_content';
+const getSocialVentures = () => [...VENTURES, ...JSON.parse(localStorage.getItem('nylaos_extra_ventures')||'[]')];
+
+const SocialAccountForm = ({ initial, onSave, onCancel }) => {
+  const [form, setForm] = useState(initial || { platform:'instagram', handle:'', url:'', followers:'', venture:'', notes:'' });
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  return (
+    <Card style={{ marginBottom:14 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:10 }}>
+        <select value={form.platform} onChange={e=>set('platform',e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit' }}>
+          {SOCIAL_PLATFORMS.map(p=><option key={p.id} value={p.id}>{p.emoji} {p.label}</option>)}
+        </select>
+        <InlineInput value={form.handle} onChange={e=>set('handle',e.target.value)} placeholder="@handle"/>
+        <InlineInput value={form.url} onChange={e=>set('url',e.target.value)} placeholder="Profile URL (optional)"/>
+        <InlineInput value={form.followers} onChange={e=>set('followers',e.target.value.replace(/[^0-9]/g,''))} placeholder="Follower count"/>
+        <select value={form.venture||''} onChange={e=>set('venture',e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit', gridColumn:'1 / -1' }}>
+          <option value="">No venture / personal</option>
+          {getSocialVentures().map(v=><option key={v} value={v}>{v}</option>)}
+        </select>
+      </div>
+      <TextArea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notes — content strategy, growth goals..." height={70}/>
+      <div style={{ display:'flex', gap:8, marginTop:10 }}>
+        <button onClick={()=>{ if(!form.handle.trim()){ toast('Add a handle first','error'); return; } onSave({...form, followers:parseInt(form.followers)||0}); }}
+          style={{ padding:'8px 18px', borderRadius:20, background:C.rose, color:'#fff', border:'none', fontSize:12.5, cursor:'pointer', fontFamily:'inherit' }}>Save</button>
+        <button onClick={onCancel} style={{ padding:'8px 18px', borderRadius:20, background:'transparent', color:C.textMuted, border:`0.5px solid ${C.border}`, fontSize:12.5, cursor:'pointer', fontFamily:'inherit' }}>Cancel</button>
+      </div>
+    </Card>
+  );
+};
+
+const SocialAccountsPanel = () => {
+  const [accounts, setAccounts] = useState(()=>JSON.parse(localStorage.getItem(SOCIAL_ACCOUNTS_KEY)||'[]'));
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const save = list => { setAccounts(list); localStorage.setItem(SOCIAL_ACCOUNTS_KEY, JSON.stringify(list)); };
+
+  const add = data => { save([{ id:Date.now(), ...data }, ...accounts]); setShowAdd(false); toast('Account added','success',1500); };
+  const update = (id, data) => { save(accounts.map(a=>a.id===id?{...a,...data}:a)); setEditingId(null); toast('Account updated','success',1500); };
+  const remove = a => {
+    addToTrash('social_account', a.handle, a, SOCIAL_ACCOUNTS_KEY);
+    save(accounts.filter(x=>x.id!==a.id));
+    toast('Moved to Recently Deleted','success',1800);
+  };
+
+  return (
+    <div className="fade-in" style={{ maxWidth:640 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <PageTitle>Accounts</PageTitle>
+        {!showAdd && <button onClick={()=>setShowAdd(true)} style={{ padding:'7px 16px', borderRadius:20, background:C.rose, color:'#fff', border:'none', fontSize:12.5, cursor:'pointer', fontFamily:'inherit', marginBottom:20 }}>+ Add Account</button>}
+      </div>
+      {showAdd && <SocialAccountForm onSave={add} onCancel={()=>setShowAdd(false)} />}
+      {accounts.length===0 && !showAdd && (
+        <div style={{ fontSize:13.5, color:C.textMuted, fontStyle:'italic', padding:'28px 4px' }}>No accounts tracked yet — add your first platform above.</div>
+      )}
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {accounts.map(a => {
+          const p = platformInfo(a.platform);
+          if (editingId === a.id) return <SocialAccountForm key={a.id} initial={a} onSave={data=>update(a.id,data)} onCancel={()=>setEditingId(null)} />;
+          return (
+            <Card key={a.id} className="card-hover" style={{ padding:'14px 16px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ width:36, height:36, borderRadius:10, background:`${p.color}20`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, flexShrink:0 }}>{p.emoji}</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:13.5, fontWeight:600, color:C.text }}>{a.handle}</span>
+                    <span style={{ fontSize:10.5, color:p.color, fontWeight:600 }}>{p.label}</span>
+                    {a.venture && <span style={{ fontSize:10, padding:'1px 8px', borderRadius:10, background:`${C.accent}20`, color:C.accent }}>{a.venture}</span>}
+                  </div>
+                  {a.notes && <div style={{ fontSize:11.5, color:C.textMuted, marginTop:3 }}>{a.notes}</div>}
+                </div>
+                <div style={{ textAlign:'right', flexShrink:0 }}>
+                  <div style={{ fontSize:15, fontWeight:700, color:C.rose }}>{(a.followers||0).toLocaleString()}</div>
+                  <div style={{ fontSize:9.5, color:C.textMuted, textTransform:'uppercase', letterSpacing:0.4 }}>followers</div>
+                </div>
+                {a.url && <a href={a.url} target="_blank" rel="noopener noreferrer" style={{ fontSize:11, color:C.accent, textDecoration:'none' }} title="Open profile">↗</a>}
+                <button onClick={()=>setEditingId(a.id)} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:12 }}>Edit</button>
+                <button onClick={()=>remove(a)} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:13 }}>✕</button>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const SocialContentForm = ({ initial, onSave, onCancel }) => {
+  const [form, setForm] = useState(initial || { platform:'instagram', title:'', date:toDateKey(), status:'Idea', link:'', venture:'', notes:'' });
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  return (
+    <Card style={{ marginBottom:14 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:10 }}>
+        <select value={form.platform} onChange={e=>set('platform',e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit' }}>
+          {SOCIAL_PLATFORMS.map(p=><option key={p.id} value={p.id}>{p.emoji} {p.label}</option>)}
+        </select>
+        <select value={form.status} onChange={e=>set('status',e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit' }}>
+          {CONTENT_STATUSES.map(s=><option key={s.id} value={s.id}>{s.id}</option>)}
+        </select>
+        <InlineInput value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Post title / caption" style={{ gridColumn:'1 / -1' }}/>
+        <input type="date" value={form.date} onChange={e=>set('date',e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit' }}/>
+        <InlineInput value={form.link} onChange={e=>set('link',e.target.value)} placeholder="Link (optional)"/>
+        <select value={form.venture||''} onChange={e=>set('venture',e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit', gridColumn:'1 / -1' }}>
+          <option value="">No venture / personal</option>
+          {getSocialVentures().map(v=><option key={v} value={v}>{v}</option>)}
+        </select>
+      </div>
+      <TextArea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notes, hooks, hashtags..." height={70}/>
+      <div style={{ display:'flex', gap:8, marginTop:10 }}>
+        <button onClick={()=>{ if(!form.title.trim()){ toast('Add a title first','error'); return; } onSave(form); }}
+          style={{ padding:'8px 18px', borderRadius:20, background:C.rose, color:'#fff', border:'none', fontSize:12.5, cursor:'pointer', fontFamily:'inherit' }}>Save</button>
+        <button onClick={onCancel} style={{ padding:'8px 18px', borderRadius:20, background:'transparent', color:C.textMuted, border:`0.5px solid ${C.border}`, fontSize:12.5, cursor:'pointer', fontFamily:'inherit' }}>Cancel</button>
+      </div>
+    </Card>
+  );
+};
+
+const ContentCalendarPanel = () => {
+  const [items, setItems] = useState(()=>JSON.parse(localStorage.getItem(SOCIAL_CONTENT_KEY)||'[]'));
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('All');
+  const save = list => { setItems(list); localStorage.setItem(SOCIAL_CONTENT_KEY, JSON.stringify(list)); };
+
+  const add = data => { save([{ id:Date.now(), createdAt:new Date().toISOString(), ...data }, ...items]); setShowAdd(false); toast('Content added','success',1500); };
+  const update = (id, data) => { save(items.map(i=>i.id===id?{...i,...data}:i)); setEditingId(null); toast('Content updated','success',1500); };
+  const remove = item => {
+    addToTrash('social_content', item.title, item, SOCIAL_CONTENT_KEY);
+    save(items.filter(x=>x.id!==item.id));
+    toast('Moved to Recently Deleted','success',1800);
+  };
+
+  const filtered = items
+    .filter(i=>statusFilter==='All'||i.status===statusFilter)
+    .sort((a,b)=>a.date.localeCompare(b.date));
+
+  return (
+    <div className="fade-in" style={{ maxWidth:660 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, flexWrap:'wrap', gap:8 }}>
+        <PageTitle>Content Calendar</PageTitle>
+        {!showAdd && <button onClick={()=>setShowAdd(true)} style={{ padding:'7px 16px', borderRadius:20, background:C.rose, color:'#fff', border:'none', fontSize:12.5, cursor:'pointer', fontFamily:'inherit', marginBottom:20 }}>+ Add Content</button>}
+      </div>
+      {showAdd && <SocialContentForm onSave={add} onCancel={()=>setShowAdd(false)} />}
+      <div style={{ display:'flex', gap:6, marginBottom:16, flexWrap:'wrap' }}>
+        {['All',...CONTENT_STATUSES.map(s=>s.id)].map(s=>
+          <Pill key={s} active={statusFilter===s} onClick={()=>setStatusFilter(s)}>{s}</Pill>
+        )}
+      </div>
+      {filtered.length===0 && !showAdd && (
+        <div style={{ fontSize:13.5, color:C.textMuted, fontStyle:'italic', padding:'28px 4px' }}>Nothing here yet — plan your next post above.</div>
+      )}
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {filtered.map(item => {
+          const p = platformInfo(item.platform);
+          const st = CONTENT_STATUSES.find(s=>s.id===item.status) || CONTENT_STATUSES[0];
+          if (editingId === item.id) return <SocialContentForm key={item.id} initial={item} onSave={data=>update(item.id,data)} onCancel={()=>setEditingId(null)} />;
+          return (
+            <Card key={item.id} className="card-hover" style={{ padding:'14px 16px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ width:36, height:36, borderRadius:10, background:`${p.color}20`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, flexShrink:0 }}>{p.emoji}</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:13.5, fontWeight:600, color:C.text }}>{item.title}</span>
+                    <span style={{ fontSize:10, padding:'1px 8px', borderRadius:10, background:`${st.color}20`, color:st.color, fontWeight:600 }}>{item.status}</span>
+                    {item.venture && <span style={{ fontSize:10, padding:'1px 8px', borderRadius:10, background:`${C.accent}20`, color:C.accent }}>{item.venture}</span>}
+                  </div>
+                  <div style={{ fontSize:11.5, color:C.textMuted, marginTop:3 }}>{new Date(item.date+'T00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}{item.notes?` · ${item.notes}`:''}</div>
+                </div>
+                {item.link && <a href={item.link} target="_blank" rel="noopener noreferrer" style={{ fontSize:11, color:C.accent, textDecoration:'none' }} title="Open link">↗</a>}
+                <button onClick={()=>setEditingId(item.id)} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:12 }}>Edit</button>
+                <button onClick={()=>remove(item)} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:13 }}>✕</button>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const SocialOverview = () => {
+  const accounts = JSON.parse(localStorage.getItem(SOCIAL_ACCOUNTS_KEY)||'[]');
+  const content  = JSON.parse(localStorage.getItem(SOCIAL_CONTENT_KEY)||'[]');
+  const totalFollowers = accounts.reduce((s,a)=>s+(a.followers||0),0);
+  const counts = CONTENT_STATUSES.map(s=>({...s, count:content.filter(c=>c.status===s.id).length}));
+  const today = toDateKey();
+  const weekOut = toDateKey(new Date(Date.now()+7*86400000));
+  const upcoming = content.filter(c=>c.status!=='Posted' && c.date>=today && c.date<=weekOut).sort((a,b)=>a.date.localeCompare(b.date));
+
+  return (
+    <div className="fade-in" style={{ maxWidth:660 }}>
+      <PageTitle>Social Media Overview</PageTitle>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:14 }}>
+        <Card style={{ textAlign:'center' }}>
+          <div style={{ fontSize:22, fontWeight:700, color:C.rose }}>{accounts.length}</div>
+          <div style={{ fontSize:10.5, color:C.textMuted, textTransform:'uppercase', letterSpacing:0.4, marginTop:2 }}>Accounts</div>
+        </Card>
+        <Card style={{ textAlign:'center' }}>
+          <div style={{ fontSize:22, fontWeight:700, color:C.rose }}>{totalFollowers.toLocaleString()}</div>
+          <div style={{ fontSize:10.5, color:C.textMuted, textTransform:'uppercase', letterSpacing:0.4, marginTop:2 }}>Total Followers</div>
+        </Card>
+        <Card style={{ textAlign:'center' }}>
+          <div style={{ fontSize:22, fontWeight:700, color:C.rose }}>{content.filter(c=>c.status==='Posted').length}</div>
+          <div style={{ fontSize:10.5, color:C.textMuted, textTransform:'uppercase', letterSpacing:0.4, marginTop:2 }}>Posts Published</div>
+        </Card>
+      </div>
+
+      {accounts.length>0 && (
+        <Card style={{ marginBottom:14 }}>
+          <SectionHeading>Followers by Platform</SectionHeading>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {accounts.map(a=>{
+              const p = platformInfo(a.platform);
+              const pct = totalFollowers>0 ? Math.round((a.followers||0)/totalFollowers*100) : 0;
+              return (
+                <div key={a.id} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <span style={{ fontSize:15, width:22, textAlign:'center', flexShrink:0 }}>{p.emoji}</span>
+                  <span style={{ fontSize:12, color:C.text, width:90, flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.handle}</span>
+                  <div style={{ flex:1, height:8, borderRadius:4, background:`${C.pink}40`, overflow:'hidden' }}>
+                    <div style={{ height:'100%', borderRadius:4, background:p.color, width:`${pct}%`, transition:'width 0.3s' }}/>
+                  </div>
+                  <span style={{ fontSize:11.5, fontWeight:600, color:C.rose, width:60, textAlign:'right', flexShrink:0 }}>{(a.followers||0).toLocaleString()}</span>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      <Card style={{ marginBottom:14 }}>
+        <SectionHeading>Content Pipeline</SectionHeading>
+        <div style={{ display:'flex', gap:8 }}>
+          {counts.map(s=>(
+            <div key={s.id} style={{ flex:1, textAlign:'center', padding:'10px 8px', borderRadius:10, background:`${s.color}15` }}>
+              <div style={{ fontSize:18, fontWeight:700, color:s.color }}>{s.count}</div>
+              <div style={{ fontSize:10, color:s.color, marginTop:2 }}>{s.id}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card>
+        <SectionHeading>Upcoming This Week</SectionHeading>
+        {upcoming.length===0 && <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic' }}>Nothing scheduled in the next 7 days.</div>}
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          {upcoming.map(item=>{
+            const p = platformInfo(item.platform);
+            return (
+              <div key={item.id} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <span style={{ fontSize:15 }}>{p.emoji}</span>
+                <span style={{ flex:1, fontSize:12.5, color:C.text }}>{item.title}</span>
+                <span style={{ fontSize:11, color:C.textMuted }}>{new Date(item.date+'T00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const SocialMediaPanel = ({ sub, onRestore }) => {
+  if (sub === 'Recently Deleted') return <TrashPanel type={['social_account','social_content']} onRestore={onRestore}/>;
+  if (sub === 'Accounts') return <SocialAccountsPanel />;
+  if (sub === 'Content Calendar') return <ContentCalendarPanel />;
+  return <SocialOverview />;
 };
 
 /* ── Chat History Helper ────────────────────────────────────────── */
@@ -6924,6 +7637,20 @@ const DEFAULT_AGENTS = [
    systemPrompt:"You are a community and brand advisor for Halo House Collective Co. Help with event planning, community building, and creative brand strategy.",...AGENT_PERM_DEFAULTS,businessAssignment:'Halo House Collective Co.'},
   {id:21,name:'Love Sativa Advisor',role:'Cannabis wellness brand strategy',emoji:'🌿',color:'#D4EED8',
    systemPrompt:"You are a brand advisor for Love Sativa, a premium cannabis wellness brand. Assist with compliant marketing, brand positioning, and growth strategy.",...AGENT_PERM_DEFAULTS,businessAssignment:'Love Sativa'},
+  {id:22,name:'Home & Living Merchandiser',role:'Product curation & storefront strategy',emoji:'🛍️',color:'#F5E8D4',
+   systemPrompt:"You help Nyla curate and merchandise the Home & Living store — product selection, pricing, seasonal collections, and storefront presentation.",...AGENT_PERM_DEFAULTS,businessAssignment:'Home & Living'},
+  {id:23,name:'Montessori Academy Advisor',role:'Curriculum & program strategy',emoji:'🎓',color:'#D4EED8',
+   systemPrompt:"You help Nyla build out the Montessori Hybrid Academy — curriculum structure, program design, and go-to-market for families.",...AGENT_PERM_DEFAULTS,businessAssignment:'Montessori Hybrid Academy'},
+  {id:24,name:'Mommy & Me Market Advisor',role:'Product & community strategy',emoji:'👶',color:'#F9E4EC',
+   systemPrompt:"You help Nyla plan the Mommy & Me Market — product sourcing, community building, and launch strategy for mommy & baby goods.",...AGENT_PERM_DEFAULTS,businessAssignment:'Mommy & Me Market'},
+  {id:25,name:'Mommy & Me Fitness Coach',role:'Program design & community growth',emoji:'💪',color:'#E8F0D4',
+   systemPrompt:"You help Nyla design classes and grow community for Mommy & Me Fitness — program structure, instructor needs, and member retention.",...AGENT_PERM_DEFAULTS,businessAssignment:'Mommy & Me Fitness'},
+  {id:26,name:'Love Nyla Media Manager',role:'Personal brand & content strategy',emoji:'✨',color:'#F0D4E8',
+   systemPrompt:"You manage Nyla's personal brand, Love Nyla — content strategy, platform growth, and partnership opportunities.",...AGENT_PERM_DEFAULTS,businessAssignment:'Love Nyla'},
+  {id:27,name:'Relationship Assistant',role:'Tracks people you meet & follow-ups',emoji:'🤝',color:'#EAE0F5',
+   systemPrompt:"You help Nyla remember and nurture relationships — who she met, what they talked about, and when to follow up. Be warm and detail-oriented about names and context.",...AGENT_PERM_DEFAULTS},
+  {id:28,name:'Brain Dump Triage Agent',role:'Sorts messy thoughts into tasks, events, ideas & notes',emoji:'🧠',color:'#CBE8F5',
+   systemPrompt:"You help Nyla process unstructured brain dumps — pulling out tasks, calendar events, ideas, notes, and shopping items from a messy stream of thoughts, and pointing her to the Brain Dump tool on Home to process them in bulk.",...AGENT_PERM_DEFAULTS},
 ];
 
 const AGENT_STATUS_META = {
@@ -6936,7 +7663,7 @@ const AGENT_STATUS_META = {
   error:              {label:'Error',              icon:'⚠',  color:'#e57373'},
 };
 
-const AgentCard = ({ agent, onEdit, onDelete }) => {
+const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
   const [chatOpen, setChatOpen] = useState(false);
   const [msgs, setMsgs] = useState([{role:'assistant',text:`Hi Nyla! I'm your ${agent.name}. How can I help you today? ✦`}]);
   const [input, setInput] = useState('');
@@ -7059,12 +7786,27 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
               <div style={{ fontSize:14, fontWeight:500, color:C.rose }}>{agent.name}</div>
               <div style={{ fontSize:11.5, color:C.textLight }}>{agent.role}</div>
             </div>
-            <button onClick={()=>setFullscreen(false)} style={{ background:'none', border:'none', fontSize:20, color:C.textMuted, cursor:'pointer', lineHeight:1 }}>✕</button>
+            <button onClick={()=>{setFullscreen(false); if(compact) setChatOpen(false);}} style={{ background:'none', border:'none', fontSize:20, color:C.textMuted, cursor:'pointer', lineHeight:1 }}>✕</button>
           </div>
           <div style={{ flex:1, overflowY:'auto', padding:'12px 18px', display:'flex', flexDirection:'column', gap:8, background:C.lavLight }}>{renderMsgs()}</div>
           {renderInput()}
         </div>
       )}
+      {compact ? (
+        <div onClick={()=>{setChatOpen(true); setFullscreen(true);}} title={`${agent.name} — ${statusMeta.label}`}
+          style={{ width:96, display:'flex', flexDirection:'column', alignItems:'center', gap:6, cursor:'pointer', padding:'10px 6px', borderRadius:14,
+            background:C.card, border:`0.5px solid ${C.border}`, transition:'transform 0.15s' }}
+          onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+          onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+          <div style={{ position:'relative' }}>
+            <div className={status==='thinking'||status==='working'?'agent-pulse':''}
+              style={{ '--pulse-color':`${statusMeta.color}80`, width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:21 }}>{agent.emoji}</div>
+            <div style={{ position:'absolute', bottom:-2, right:-2, width:13, height:13, borderRadius:'50%', background:statusMeta.color, border:`2px solid ${C.card}` }}/>
+          </div>
+          <div style={{ fontSize:10.5, fontWeight:600, color:C.text, textAlign:'center', lineHeight:1.25 }}>{agent.name}</div>
+          <div style={{ fontSize:8.5, color:statusMeta.color, fontWeight:600, textTransform:'uppercase', letterSpacing:0.3 }}>{statusMeta.label}</div>
+        </div>
+      ) : (
       <Card style={{ padding:'18px', display:'flex', flexDirection:'column' }}>
         <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:10 }}>
           <div style={{ position:'relative', flexShrink:0 }}>
@@ -7099,6 +7841,7 @@ const AgentCard = ({ agent, onEdit, onDelete }) => {
           </div>
         )}
       </Card>
+      )}
     </>
   );
 };
@@ -7224,9 +7967,30 @@ const AgentsChat = () => {
   );
 };
 
+const AgentOfficeView = ({ agents }) => {
+  const groups = {};
+  agents.forEach(a => { const g = a.businessAssignment || 'Personal / Cross-Business'; (groups[g]=groups[g]||[]).push(a); });
+  const groupNames = Object.keys(groups).sort((a,b)=> a==='Personal / Cross-Business'?-1 : b==='Personal / Cross-Business'?1 : a.localeCompare(b));
+  return (
+    <div>
+      {groupNames.map(g=>(
+        <div key={g} style={{ marginBottom:22 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, textTransform:'uppercase', letterSpacing:0.5, marginBottom:10 }}>
+            {g==='Personal / Cross-Business' ? '✦ Personal / Cross-Business Desk' : `💼 ${g} Desk`}
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:12, padding:16, borderRadius:16, background:`${C.lavender}18`, border:`0.5px dashed ${C.border}` }}>
+            {groups[g].map(a=><AgentCard key={a.id} agent={a} compact/>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const AgentsPanel = () => {
   const KEY = 'nylaos_agents';
   const [agents, setAgents] = useState(()=>{ const s=localStorage.getItem(KEY); return s?JSON.parse(s):DEFAULT_AGENTS; });
+  const [view, setView] = useState('office');
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState(null);
   const BLANK_FORM = {name:'',role:'',emoji:'🤖',color:'#E8E0F5',systemPrompt:'',businessAssignment:'',folderAccess:[],autoApprove:false,permissions:{canCreate:true,canEdit:true,canDelete:false}};
@@ -7243,7 +8007,7 @@ const AgentsPanel = () => {
   };
   const startEdit = a=>{setEditId(a.id);setForm({...BLANK_FORM,name:a.name,role:a.role,emoji:a.emoji,color:a.color,systemPrompt:a.systemPrompt,businessAssignment:a.businessAssignment||'',folderAccess:a.folderAccess||[],autoApprove:a.autoApprove||false,permissions:a.permissions||BLANK_FORM.permissions});setShowCreate(true);};
   const toggleFormFolder = name => setForm(f=>({...f, folderAccess: f.folderAccess.includes(name) ? f.folderAccess.filter(x=>x!==name) : [...f.folderAccess, name]}));
-  const isDefault = a=>a.id>=1&&a.id<=21;
+  const isDefault = a=>a.id>=1&&a.id<=28;
   const [showLog, setShowLog] = useState(false);
   const activityLog = JSON.parse(localStorage.getItem('nylaos_agent_activity_log')||'[]');
 
@@ -7252,6 +8016,10 @@ const AgentsPanel = () => {
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
         <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:21, color:C.rose }}>AI Agents</div>
         <div style={{display:'flex',gap:8}}>
+          <div style={{ display:'flex', borderRadius:12, border:`0.5px solid ${C.border}`, overflow:'hidden' }}>
+            <button onClick={()=>setView('office')} style={{ padding:'9px 14px', background:view==='office'?C.rose:'transparent', color:view==='office'?'#fff':C.text, border:'none', fontSize:13, cursor:'pointer' }}>🏢 Office</button>
+            <button onClick={()=>setView('list')} style={{ padding:'9px 14px', background:view==='list'?C.rose:'transparent', color:view==='list'?'#fff':C.text, border:'none', fontSize:13, cursor:'pointer' }}>☰ List</button>
+          </div>
           <button onClick={()=>setShowLog(s=>!s)} style={{ padding:'9px 16px', borderRadius:12, background:showLog?`${C.accent}25`:'transparent', border:`0.5px solid ${C.border}`, color:C.text, fontSize:13, cursor:'pointer' }}>🕐 Activity Log{activityLog.length?` (${activityLog.length})`:''}</button>
           <button onClick={()=>{setShowCreate(s=>!s);setEditId(null);setForm(BLANK_FORM); }}
             style={{ padding:'9px 20px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:'pointer' }}>+ Create Agent</button>
@@ -7334,13 +8102,15 @@ const AgentsPanel = () => {
           </div>
         </Card>
       )}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-        {agents.map(a=>(
-          <AgentCard key={a.id} agent={a}
-            onEdit={()=>startEdit(a)}
-            onDelete={!isDefault(a)?()=>save(agents.filter(x=>x.id!==a.id)):null}/>
-        ))}
-      </div>
+      {view==='office' ? <AgentOfficeView agents={agents} /> : (
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+          {agents.map(a=>(
+            <AgentCard key={a.id} agent={a}
+              onEdit={()=>startEdit(a)}
+              onDelete={!isDefault(a)?()=>save(agents.filter(x=>x.id!==a.id)):null}/>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -7362,6 +8132,15 @@ const AppearancePanel = () => {
   const accent = prefs.accent || 'pink';
   const fontSize = prefs.fontSize || 'default';
   const darkMode = !!prefs.darkMode;
+  const density = prefs.density || 'comfortable';
+  const motion = prefs.motion || 'full';
+  const customPrimary = prefs.customPrimary || C.rose;
+  const customAccent = prefs.customAccent || C.accent;
+  const customPreview = deriveTheme(customPrimary, customAccent);
+  const gradAngle = prefs.gradientAngle ?? 135;
+  const gradC1 = prefs.gradientColor1 || '#f2c4ce';
+  const gradC2 = prefs.gradientColor2 || '#d4c0f0';
+  const gradientCss = `linear-gradient(${gradAngle}deg,${gradC1},${gradC2})`;
 
   const PALETTES = [
     { id:'pink',   label:'Rose Pink',    swatch:'#c4607a' },
@@ -7407,7 +8186,37 @@ const AppearancePanel = () => {
               {p.label}
             </button>
           ))}
+          <button onClick={()=>update('accent', 'custom')}
+            style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 14px', borderRadius:20, cursor:'pointer',
+              fontFamily:'inherit', fontSize:13, background:'transparent',
+              border: `2px solid ${accent==='custom' ? customPrimary : C.border}`,
+              color: accent==='custom' ? customPrimary : C.textLight,
+              fontWeight: accent==='custom' ? 600 : 400, transition:'all 0.15s' }}>
+            <span style={{ width:13, height:13, borderRadius:'50%', display:'inline-block', flexShrink:0,
+              background:'conic-gradient(red,yellow,lime,cyan,blue,magenta,red)' }}/>
+            Custom
+          </button>
         </div>
+        {accent === 'custom' && (
+          <div style={{ marginTop:14, paddingTop:14, borderTop:`0.5px solid ${C.border}` }}>
+            <div style={{ display:'flex', gap:20, flexWrap:'wrap', marginBottom:12 }}>
+              <div>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:6 }}>Primary</div>
+                <ColorWheelPicker value={customPrimary} onChange={col=>update('customPrimary', col)} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:6 }}>Accent</div>
+                <ColorWheelPicker value={customAccent} onChange={col=>update('customAccent', col)} />
+              </div>
+            </div>
+            <div style={{ fontSize:11, color:C.textMuted, marginBottom:6 }}>Preview</div>
+            <div style={{ display:'flex', gap:6 }}>
+              {[customPreview.rose, customPreview.accent, customPreview.pink, customPreview.lavender, customPreview.pinkLight].map((c,i)=>(
+                <div key={i} style={{ flex:1, height:28, borderRadius:8, background:c, border:`0.5px solid ${C.border}` }}/>
+              ))}
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* Font size */}
@@ -7416,6 +8225,28 @@ const AppearancePanel = () => {
         <div style={{ display:'flex', gap:10 }}>
           {[{id:'small',label:'Small'},{id:'default',label:'Default'},{id:'large',label:'Large'}].map(f => (
             <button key={f.id} onClick={()=>update('fontSize', f.id)} style={btnSt(fontSize===f.id)}>{f.label}</button>
+          ))}
+        </div>
+      </Card>
+
+      {/* Density */}
+      <Card style={{ marginBottom:14 }}>
+        <SectionHeading>Density</SectionHeading>
+        <div style={{ fontSize:12, color:C.textMuted, marginBottom:10 }}>Controls spacing and padding across cards & layout.</div>
+        <div style={{ display:'flex', gap:10 }}>
+          {[{id:'compact',label:'Compact'},{id:'comfortable',label:'Comfortable'},{id:'spacious',label:'Spacious'}].map(d => (
+            <button key={d.id} onClick={()=>update('density', d.id)} style={btnSt(density===d.id)}>{d.label}</button>
+          ))}
+        </div>
+      </Card>
+
+      {/* Motion */}
+      <Card style={{ marginBottom:14 }}>
+        <SectionHeading>Motion</SectionHeading>
+        <div style={{ fontSize:12, color:C.textMuted, marginBottom:10 }}>Controls animation & transition speed across the app.</div>
+        <div style={{ display:'flex', gap:10 }}>
+          {[{id:'full',label:'Full'},{id:'reduced',label:'Reduced'},{id:'none',label:'None'}].map(m => (
+            <button key={m.id} onClick={()=>update('motion', m.id)} style={btnSt(motion===m.id)}>{m.label}</button>
           ))}
         </div>
       </Card>
@@ -7439,11 +8270,39 @@ const AppearancePanel = () => {
             </button>
           ))}
         </div>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+        <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:14}}>
           <span style={{fontSize:12,color:C.textMuted}}>Custom URL:</span>
           <input value={prefs.wallpaperUrl||''} onChange={e=>update('wallpaperUrl',e.target.value)}
             placeholder="https://example.com/image.jpg"
             style={{flex:1,padding:'6px 10px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.pinkLight,color:C.text,fontSize:12,fontFamily:'inherit'}}/>
+        </div>
+        <div style={{ paddingTop:14, borderTop:`0.5px solid ${C.border}` }}>
+          <div style={{ fontSize:12, color:C.textMuted, marginBottom:10 }}>Gradient builder</div>
+          <div style={{ display:'flex', alignItems:'center', gap:16, flexWrap:'wrap', marginBottom:10 }}>
+            <div>
+              <div style={{ fontSize:10.5, color:C.textMuted, marginBottom:5 }}>Color 1</div>
+              <ColorWheelPicker value={gradC1} onChange={col=>update('gradientColor1', col)} />
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:C.textMuted, marginBottom:5 }}>Color 2</div>
+              <ColorWheelPicker value={gradC2} onChange={col=>update('gradientColor2', col)} />
+            </div>
+            <div style={{ flex:1, minWidth:120 }}>
+              <div style={{ fontSize:10.5, color:C.textMuted, marginBottom:5 }}>Angle — {gradAngle}°</div>
+              <input type="range" min={0} max={360} value={gradAngle}
+                onChange={e=>update('gradientAngle', parseInt(e.target.value))}
+                style={{ width:'100%', accentColor:C.rose }}/>
+            </div>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:60, height:40, borderRadius:8, background:gradientCss, border:`0.5px solid ${C.border}`, flexShrink:0 }}/>
+            <button onClick={()=>{ update('wallpaper','customGradient'); update('customGradientCss', gradientCss); }}
+              style={{ padding:'7px 14px', borderRadius:20, background:prefs.wallpaper==='customGradient'?C.rose:'transparent',
+                color:prefs.wallpaper==='customGradient'?'#fff':C.textLight, border:`1px solid ${prefs.wallpaper==='customGradient'?C.rose:C.border}`,
+                fontSize:12, cursor:'pointer', fontFamily:'inherit' }}>
+              {prefs.wallpaper==='customGradient' ? '✓ Using this gradient' : 'Use as wallpaper'}
+            </button>
+          </div>
         </div>
       </Card>
 
@@ -7473,6 +8332,7 @@ const CustomNamesPanel = () => {
     {key:'notebook',label:'Notebook section',default:'Notebook',placeholder:'Journal, My Pages, Brain...'},
     {key:'goals',label:'Goals section',default:'Goals',placeholder:'Targets, North Stars...'},
     {key:'business',label:'Business section',default:'Business',placeholder:'Empire, Ventures, Hustles...'},
+    {key:'social',label:'Social Media section',default:'Social Media',placeholder:'Content, Socials, Platforms...'},
     {key:'calendar',label:'Calendar section',default:'Calendar',placeholder:'Timeline, Schedule...'},
     {key:'cosmic',label:'Cosmic section',default:'Cosmic',placeholder:'Universe, Stars, Magic...'},
     {key:'university',label:'University section',default:'University',placeholder:'School, Academy...'},
@@ -7936,14 +8796,15 @@ const SettingsPanel = ({ sub }) => {
 /* ── Router ─────────────────────────────────────────────────────── */
 const MainContent = ({ navId, sub, onRestoreBiz }) => (
   <div key={`${navId}__${sub}`} className="fade-in">
-    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:<FocusMode/>)}
+    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:<FocusMode/>)}
     {navId==='calendar'   && (sub==='Event Planner'?<EventPlanner/>:<CalendarPanel sub={sub} />)}
-    {navId==='tasks'      && (sub==='Pros & Cons'?<ProsConsMaker/>:<TasksPanel sub={sub} />)}
+    {navId==='tasks'      && (sub==='Pros & Cons'?<ProsConsMaker/>:sub==='Shopping List'?<TasksPanel sub="Shopping List" storageKey="nylaos_shopping_list" />:<TasksPanel sub={sub} />)}
     {navId==='period'     && <PeriodPanel sub={sub} />}
     {navId==='ideas'      && <IdeaBank />}
     {navId==='notebook'   && <NotebookPanel sub={sub} />}
     {navId==='goals'      && (sub==='Dream Life'?<DreamLifeBlueprint/>:<GoalsPanel sub={sub} />)}
     {navId==='business'   && (sub==='Recently Deleted'?<TrashPanel type="business" onRestoreBusiness={onRestoreBiz}/>:<BusinessPanel sub={sub} />)}
+    {navId==='social'     && <SocialMediaPanel sub={sub} />}
     {navId==='cosmic'     && <CosmicPanel sub={sub} />}
     {navId==='university' && <UniversityPanel sub={sub} />}
     {navId==='agents'     && <AgentsPanel />}
@@ -8680,11 +9541,11 @@ const App = () => {
 
   const isNotebook = activeNav === 'notebook';
   const isFullWidth = activeNav === 'notebook' || activeNav === 'ideas';
-  const mainPadding = isNotebook ? '0' : isMobile ? '16px 14px 20px' : '28px 32px';
+  const mainPadding = isNotebook ? '0' : isMobile ? 'calc(16px * var(--nyla-space,1)) calc(14px * var(--nyla-space,1)) calc(20px * var(--nyla-space,1))' : 'calc(28px * var(--nyla-space,1)) calc(32px * var(--nyla-space,1))';
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:(()=>{
-      const WALLPAPERS = {gradient1:'linear-gradient(135deg,#fce4ec,#f3e5f5,#e8eaf6)',gradient2:'linear-gradient(135deg,#e0f2f1,#e1f5fe,#ede7f6)',gradient3:'linear-gradient(135deg,#fce4ec,#fff3e0,#fce4ec)',gradient4:'linear-gradient(135deg,#1a0a2e,#2d1450,#120820)',gradient5:'linear-gradient(135deg,#1b3a2d,#0d2818,#2a4a3a)'};
+      const WALLPAPERS = {gradient1:'linear-gradient(135deg,#fce4ec,#f3e5f5,#e8eaf6)',gradient2:'linear-gradient(135deg,#e0f2f1,#e1f5fe,#ede7f6)',gradient3:'linear-gradient(135deg,#fce4ec,#fff3e0,#fce4ec)',gradient4:'linear-gradient(135deg,#1a0a2e,#2d1450,#120820)',gradient5:'linear-gradient(135deg,#1b3a2d,#0d2818,#2a4a3a)',customGradient:_ap.customGradientCss};
       if(_ap.wallpaperUrl) return `url(${_ap.wallpaperUrl}) center/cover fixed`;
       if(_ap.wallpaper&&WALLPAPERS[_ap.wallpaper]) return WALLPAPERS[_ap.wallpaper];
       return C.cream;
