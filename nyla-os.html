@@ -347,24 +347,81 @@ window._exportNotebookMd=function(){
   return md;
 };
 
-window._exportToGoogleDrive=function(){
+/* ── Real Google Docs export ──────────────────────────────────────
+   Reuses the same Firebase Google sign-in already used for cloud sync, but
+   requests the Docs scope too, so we get a real OAuth access token back and
+   can create actual Google Docs via the Docs API — no separate backend needed.
+   The token is short-lived (~1hr, browser-session only, never persisted), so
+   re-connecting occasionally is expected and handled via a 401 retry below. */
+const DOCS_SCOPE = 'https://www.googleapis.com/auth/documents';
+let _driveToken = null, _driveTokenExpiry = 0;
+
+async function connectGoogleDrive(){
+  if(!_fbAuth){ alert('Firebase config not filled in yet — see code comments.'); return null; }
+  try{
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.addScope(DOCS_SCOPE);
+    const result = await _fbAuth.signInWithPopup(provider);
+    const credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
+    if(credential && credential.accessToken){
+      _driveToken = credential.accessToken;
+      _driveTokenExpiry = Date.now() + 55*60*1000;
+      return _driveToken;
+    }
+    return null;
+  }catch(e){
+    if(e.code!=='auth/popup-closed-by-user' && typeof toast==='function') toast('Google Docs connection failed: '+e.message,'error',4000);
+    return null;
+  }
+}
+
+async function _createGoogleDoc(title, plainText){
+  let token = (_driveToken && Date.now()<_driveTokenExpiry) ? _driveToken : await connectGoogleDrive();
+  if(!token) return null;
+  const attempt = async tok => {
+    const createRes = await fetch('https://docs.googleapis.com/v1/documents', {
+      method:'POST', headers:{'Authorization':'Bearer '+tok,'Content-Type':'application/json'}, body:JSON.stringify({title:title||'Untitled'})
+    });
+    if(createRes.status===401) return {expired:true};
+    if(!createRes.ok) throw new Error('Docs create failed: '+createRes.status);
+    const doc = await createRes.json();
+    if(plainText && plainText.trim()){
+      await fetch(`https://docs.googleapis.com/v1/documents/${doc.documentId}:batchUpdate`, {
+        method:'POST', headers:{'Authorization':'Bearer '+tok,'Content-Type':'application/json'},
+        body:JSON.stringify({ requests:[{ insertText:{ location:{index:1}, text:plainText } }] })
+      });
+    }
+    return { documentId: doc.documentId };
+  };
+  let result = await attempt(token);
+  if(result && result.expired){
+    _driveToken = null;
+    token = await connectGoogleDrive();
+    if(!token) return null;
+    result = await attempt(token);
+  }
+  return result && result.documentId ? result : null;
+}
+
+window._exportToGoogleDrive=async function(){
   const md=window._exportNotebookMd();
   if(!md){alert('No notebooks to export.');return;}
-  navigator.clipboard.writeText(md).then(()=>{
-    if(typeof toast==='function') toast('Copied to clipboard — paste into your new Google Doc','success',3000);
-  }).catch(()=>{
-    if(typeof toast==='function') toast('Opening Google Doc — copy manually','info',2500);
-  });
-  setTimeout(()=>window.open('https://docs.google.com/document/create','_blank'),400);
+  if(typeof toast==='function') toast('Connecting to Google Docs...','info',2000);
+  try{
+    const result = await _createGoogleDoc('Nyla OS Notebooks — '+new Date().toLocaleDateString(), md);
+    if(!result){ if(typeof toast==='function') toast('Could not connect to Google Docs','error'); return; }
+    window.open(`https://docs.google.com/document/d/${result.documentId}/edit`,'_blank');
+    if(typeof toast==='function') toast('Saved to Google Docs ✓','success',3000);
+  }catch(e){ console.warn('Drive export failed:',e); if(typeof toast==='function') toast('Google Docs export failed','error'); }
 };
-window._exportSingleToGoogleDoc=function(title, content){
-  const text = title + '\n\n' + (content||'');
-  navigator.clipboard.writeText(text).then(()=>{
-    if(typeof toast==='function') toast('Copied — paste into your new Google Doc','success',3000);
-  }).catch(()=>{
-    if(typeof toast==='function') toast('Opening Google Doc — copy manually','info',2500);
-  });
-  setTimeout(()=>window.open('https://docs.google.com/document/create','_blank'),400);
+window._exportSingleToGoogleDoc=async function(title, content){
+  if(typeof toast==='function') toast('Connecting to Google Docs...','info',2000);
+  try{
+    const result = await _createGoogleDoc(title||'Untitled', _htmlToText(content||''));
+    if(!result){ if(typeof toast==='function') toast('Could not connect to Google Docs','error'); return; }
+    window.open(`https://docs.google.com/document/d/${result.documentId}/edit`,'_blank');
+    if(typeof toast==='function') toast('Saved to Google Docs ✓','success',3000);
+  }catch(e){ console.warn('Drive export failed:',e); if(typeof toast==='function') toast('Google Docs export failed','error'); }
 };
 
 async function _writeNotebookFile(){
@@ -731,8 +788,8 @@ const printAsPdf = (title, content, meta='') => {
   w.document.close(); w.print();
 };
 
-/* Reusable export menu — Download TXT/Markdown, Print/PDF, Save to Google Drive, Copy link.
-   Attach anywhere Print/PDF/Drive export appears so Download is always available alongside it. */
+/* Reusable export menu — Download TXT/Markdown, Print/PDF, Save to Google Docs, Copy link.
+   Attach anywhere Print/PDF/Docs export appears so Download is always available alongside it. */
 const ExportMenu = ({ title, content, meta='', csvData=null, onSaveToNotebook=null }) => {
   const [open, setOpen] = useState(false);
   const items = [
@@ -741,7 +798,7 @@ const ExportMenu = ({ title, content, meta='', csvData=null, onSaveToNotebook=nu
     ['📃 Download DOCX',     () => downloadAsDocx(title, content)],
     ...(csvData ? [['📊 Download CSV', () => downloadAsCsv(title, csvData)]] : []),
     ['🖨 Print / PDF',        () => printAsPdf(title, content, meta)],
-    ['📁 Save to Google Drive', () => window._exportSingleToGoogleDoc(title, content)],
+    ['📝 Save to Google Docs', () => window._exportSingleToGoogleDoc(title, content)],
     ...(onSaveToNotebook ? [['📓 Save to Notebook', onSaveToNotebook]] : []),
     ['🔗 Copy link',          () => { navigator.clipboard.writeText(window.location.href); if(typeof toast==='function') toast('Link copied','success',1500); }],
   ];
@@ -4743,8 +4800,8 @@ const NotebookPanel = ({ sub }) => {
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                 Notebook
               </button>
-              <button onClick={()=>window._exportToGoogleDrive()} title="Export notebooks and open Google Drive" style={{padding:'4px 11px',borderRadius:8,background:'rgba(66,133,244,0.08)',border:'0.5px solid rgba(66,133,244,0.33)',color:'#4285f4',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
-                {"☁️ Drive"}
+              <button onClick={()=>window._exportToGoogleDrive()} title="Export all notebooks to a new Google Doc" style={{padding:'4px 11px',borderRadius:8,background:'rgba(66,133,244,0.08)',border:'0.5px solid rgba(66,133,244,0.33)',color:'#4285f4',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
+                {"📝 Docs"}
               </button>
               {nbFileLinked?(
                 <button onClick={()=>{window.unlinkNotebookFile();setNbFileLinked(false);}} title="Auto-saving to local file — click to unlink" style={{padding:'4px 11px',borderRadius:8,background:`#68c97a22`,border:`0.5px solid #68c97a66`,color:'#3a8a4a',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
