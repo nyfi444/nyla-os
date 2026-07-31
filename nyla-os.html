@@ -688,6 +688,7 @@ const NAV = [
   { id:'social',     label:'Social Media', sub:['Overview','Accounts','Content Calendar','Recently Deleted'] },
   { id:'cosmic',     label:'Cosmic',     sub:['Numerology','Astrology','Matrix of Destiny'] },
   { id:'university', label:'University', sub:['Dashboard','Upload Syllabus','Courses','Assignments','GPA Calculator','Resources','Recently Deleted'] },
+  { id:'books',      label:'Books',      sub:['Overview','My Library','Recently Deleted'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
   { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
 ];
@@ -864,6 +865,7 @@ const icons = {
   notebook:      `<path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>`,
   business:      `<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/>`,
   social:        `<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>`,
+  books:         `<path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>`,
   cosmic:        `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>`,
   manifestation: `<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>`,
   university:    `<path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/>`,
@@ -1920,7 +1922,7 @@ const TrashPanel = ({ type, onRestoreBusiness, onRestore }) => {
     refresh();
   };
   const handleDelete = id => { permanentDelete(id); refresh(); };
-  const typeLabel = { task:'Task', goal:'Goal', business:'Business', notebook_page:'Note', idea:'Idea', calendar_event:'Calendar Event', course:'Course', assignment:'Assignment', habit:'Habit', bucket_item:'Bucket List Item', project:'Project', social_account:'Social Account', social_content:'Content Item' };
+  const typeLabel = { task:'Task', goal:'Goal', business:'Business', notebook_page:'Note', idea:'Idea', calendar_event:'Calendar Event', course:'Course', assignment:'Assignment', habit:'Habit', bucket_item:'Bucket List Item', project:'Project', social_account:'Social Account', social_content:'Content Item', book:'Book' };
   return (
     <div className="fade-in" style={{ maxWidth:620 }}>
       <PageTitle>Recently Deleted</PageTitle>
@@ -7847,6 +7849,202 @@ const UniversityPanel = ({ sub }) => {
   return <SimpleEditor sub="Resources" />;
 };
 
+/* ── Books ──────────────────────────────────────────────────────────── */
+const BOOK_STATUSES = [
+  { key:'want',     label:'Want to Read', color:'#9080d8' },
+  { key:'reading',  label:'Reading',      color:'#F4A261' },
+  { key:'finished', label:'Finished',     color:'#4CAF77' },
+];
+const BOOKS_KEY = 'nylaos_books';
+
+const StarRating = ({ value=0, onChange, size=16, readOnly=false }) => (
+  <div style={{ display:'flex', gap:2 }} onClick={e=>e.stopPropagation()}>
+    {[1,2,3,4,5].map(n=>(
+      <span key={n} onClick={()=>!readOnly&&onChange&&onChange(n===value?0:n)}
+        style={{ fontSize:size, cursor:readOnly?'default':'pointer', color:n<=value?'#F4A261':C.border, lineHeight:1 }}>★</span>
+    ))}
+  </div>
+);
+
+const BookForm = ({ initial, onSave, onCancel }) => {
+  const [form, setForm] = useState(initial || { title:'', author:'', status:'want', rating:0, genre:'', pages:'', currentPage:'', notes:'' });
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  return (
+    <Card style={{ marginBottom:14 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:10 }}>
+        <InlineInput value={form.title} onChange={e=>set('title',e.target.value)} placeholder="Book title" style={{ gridColumn:'1 / -1' }}/>
+        <InlineInput value={form.author} onChange={e=>set('author',e.target.value)} placeholder="Author"/>
+        <InlineInput value={form.genre} onChange={e=>set('genre',e.target.value)} placeholder="Genre (optional)"/>
+        <select value={form.status} onChange={e=>set('status',e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit' }}>
+          {BOOK_STATUSES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <span style={{ fontSize:12, color:C.textMuted }}>Rating</span>
+          <StarRating value={form.rating} onChange={v=>set('rating',v)}/>
+        </div>
+        <InlineInput value={form.pages} onChange={e=>set('pages',e.target.value.replace(/[^0-9]/g,''))} placeholder="Total pages (optional)"/>
+        <InlineInput value={form.currentPage} onChange={e=>set('currentPage',e.target.value.replace(/[^0-9]/g,''))} placeholder="Current page (optional)"/>
+      </div>
+      <TextArea value={form.notes} onChange={e=>set('notes',e.target.value)} placeholder="Notes, quotes, takeaways..." height={90}/>
+      <div style={{ display:'flex', gap:8, marginTop:10 }}>
+        <button onClick={()=>{ if(!form.title.trim()){ toast('Add a title first','error'); return; } onSave({...form, pages:parseInt(form.pages)||null, currentPage:parseInt(form.currentPage)||null}); }}
+          style={{ padding:'8px 18px', borderRadius:20, background:C.rose, color:'#fff', border:'none', fontSize:12.5, cursor:'pointer', fontFamily:'inherit' }}>Save</button>
+        <button onClick={onCancel} style={{ padding:'8px 18px', borderRadius:20, background:'transparent', color:C.textMuted, border:`0.5px solid ${C.border}`, fontSize:12.5, cursor:'pointer', fontFamily:'inherit' }}>Cancel</button>
+      </div>
+    </Card>
+  );
+};
+
+const BookDetailModal = ({ book, onClose, onUpdate, onDelete }) => {
+  const [notes, setNotes] = useState(book.notes||'');
+  useEffect(()=>{ setNotes(book.notes||''); }, [book.id]);
+  const commit = () => { if(notes !== (book.notes||'')) onUpdate(book.id, {notes}); };
+  const statusInfo = BOOK_STATUSES.find(s=>s.key===book.status) || BOOK_STATUSES[0];
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:9998, background:C.cream, display:'flex', flexDirection:'column' }}>
+      <div style={{ padding:'12px 24px', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:12, background:C.sidebarBg, flexShrink:0 }}>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:16, color:C.rose, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{book.title}</div>
+          <div style={{ fontSize:11.5, color:C.textMuted }}>{book.author}</div>
+        </div>
+        <span style={{ fontSize:10, fontWeight:600, padding:'2px 10px', borderRadius:10, background:`${statusInfo.color}20`, color:statusInfo.color, flexShrink:0 }}>{statusInfo.label}</span>
+        <ExportMenu title={book.title} content={`<h3>${book.title}</h3><p><em>${book.author||''}</em></p><h3>Notes</h3><p>${(notes||'').replace(/\n/g,'<br/>')||'<br/>'}</p>`} meta={book.author}/>
+        <button onClick={()=>{ if(window.confirm(`Delete "${book.title}"? It'll move to Recently Deleted.`)){ onDelete(book.id); onClose(); } }}
+          style={{ padding:'6px 12px', borderRadius:8, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:11.5, cursor:'pointer' }}>Delete</button>
+        <button onClick={()=>{commit();onClose();}} style={{ background:'none', border:'none', fontSize:22, color:C.textMuted, cursor:'pointer', lineHeight:1 }}>✕</button>
+      </div>
+      <div style={{ flex:1, overflowY:'auto', padding:'36px 20px' }}>
+        <div style={{ maxWidth:680, margin:'0 auto' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:18, marginBottom:26, flexWrap:'wrap' }}>
+            <StarRating value={book.rating||0} onChange={v=>onUpdate(book.id,{rating:v})} size={22}/>
+            {book.pages ? (
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ fontSize:12, color:C.textMuted }}>{book.currentPage||0} / {book.pages} pages</div>
+                <div style={{ width:100, height:6, borderRadius:3, background:`${C.pink}40`, overflow:'hidden' }}>
+                  <div style={{ height:'100%', borderRadius:3, background:C.rose, width:`${Math.min(100,Math.round((book.currentPage||0)/book.pages*100))}%` }}/>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} onBlur={commit} placeholder="Notes, favorite quotes, key takeaways..."
+            style={{ width:'100%', minHeight:340, border:'none', background:'transparent', resize:'none', fontSize:15, lineHeight:1.9, color:C.text, fontFamily:'inherit', outline:'none' }}/>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const BookLibrary = () => {
+  const [books, setBooks] = useState(()=>JSON.parse(localStorage.getItem(BOOKS_KEY)||'[]'));
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [detailId, setDetailId] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const save = list => { setBooks(list); localStorage.setItem(BOOKS_KEY, JSON.stringify(list)); };
+  const add = data => { save([{id:Date.now(), created:new Date().toISOString(), updated:new Date().toISOString(), ...data}, ...books]); setShowAdd(false); toast('Book added','success',1500); };
+  const update = (id, fields) => { save(books.map(b=>b.id===id?{...b,...fields,updated:new Date().toISOString()}:b)); };
+  const remove = id => {
+    const book = books.find(b=>b.id===id);
+    if (book) addToTrash('book', book.title, book, BOOKS_KEY);
+    save(books.filter(b=>b.id!==id));
+    toast('Moved to Recently Deleted','success',1800);
+  };
+  const filtered = filter==='all' ? books : books.filter(b=>b.status===filter);
+
+  return (
+    <div className="fade-in" style={{ maxWidth:700 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <PageTitle>My Library</PageTitle>
+        {!showAdd && <button onClick={()=>setShowAdd(true)} style={{ padding:'7px 16px', borderRadius:20, background:C.rose, color:'#fff', border:'none', fontSize:12.5, cursor:'pointer', fontFamily:'inherit', marginBottom:20 }}>+ Add Book</button>}
+      </div>
+      {showAdd && <BookForm onSave={add} onCancel={()=>setShowAdd(false)}/>}
+      <div style={{ display:'flex', gap:6, marginBottom:16, flexWrap:'wrap' }}>
+        {['all',...BOOK_STATUSES.map(s=>s.key)].map(k=>(
+          <Pill key={k} active={filter===k} onClick={()=>setFilter(k)}>{k==='all'?'All':BOOK_STATUSES.find(s=>s.key===k).label}</Pill>
+        ))}
+      </div>
+      {filtered.length===0 && !showAdd && <div style={{ fontSize:13.5, color:C.textMuted, fontStyle:'italic', padding:'28px 4px' }}>No books here yet — add your first one above.</div>}
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {filtered.map(book => {
+          if (editId === book.id) return <BookForm key={book.id} initial={book} onSave={data=>{update(book.id,data);setEditId(null);}} onCancel={()=>setEditId(null)}/>;
+          const st = BOOK_STATUSES.find(s=>s.key===book.status) || BOOK_STATUSES[0];
+          return (
+            <Card key={book.id} className="card-hover" style={{ padding:'14px 16px', cursor:'pointer' }} onClick={()=>setDetailId(book.id)}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ width:36, height:36, borderRadius:8, background:`${st.color}20`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, flexShrink:0 }}>📖</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:13.5, fontWeight:600, color:C.text }}>{book.title}</span>
+                    <span style={{ fontSize:10, padding:'1px 8px', borderRadius:10, background:`${st.color}20`, color:st.color, fontWeight:600 }}>{st.label}</span>
+                  </div>
+                  <div style={{ fontSize:11.5, color:C.textMuted, marginTop:2 }}>{book.author}{book.genre?` · ${book.genre}`:''}</div>
+                </div>
+                {book.rating>0 && <StarRating value={book.rating} readOnly size={12}/>}
+                <button onClick={e=>{e.stopPropagation();setEditId(book.id);}} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:12 }}>Edit</button>
+                <button onClick={e=>{e.stopPropagation();remove(book.id);}} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:13 }}>✕</button>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+      {detailId && books.find(b=>b.id===detailId) && (
+        <BookDetailModal book={books.find(b=>b.id===detailId)} onClose={()=>setDetailId(null)} onUpdate={update} onDelete={remove}/>
+      )}
+    </div>
+  );
+};
+
+const BooksOverview = () => {
+  const books = JSON.parse(localStorage.getItem(BOOKS_KEY)||'[]');
+  const thisYear = new Date().getFullYear();
+  const finishedThisYear = books.filter(b=>b.status==='finished' && b.updated && new Date(b.updated).getFullYear()===thisYear).length;
+  const reading = books.filter(b=>b.status==='reading');
+  const rated = books.filter(b=>b.rating>0);
+  const avgRating = rated.length ? (rated.reduce((s,b)=>s+b.rating,0)/rated.length).toFixed(1) : null;
+
+  return (
+    <div className="fade-in" style={{ maxWidth:700 }}>
+      <PageTitle>Books Overview</PageTitle>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, marginBottom:20 }}>
+        <Card style={{ textAlign:'center' }}><div style={{ fontSize:20, fontWeight:700, color:C.rose }}>{books.length}</div><div style={{ fontSize:10, color:C.textMuted, textTransform:'uppercase' }}>Total Books</div></Card>
+        <Card style={{ textAlign:'center' }}><div style={{ fontSize:20, fontWeight:700, color:'#4CAF77' }}>{finishedThisYear}</div><div style={{ fontSize:10, color:C.textMuted, textTransform:'uppercase' }}>Finished in {thisYear}</div></Card>
+        <Card style={{ textAlign:'center' }}><div style={{ fontSize:20, fontWeight:700, color:'#F4A261' }}>{reading.length}</div><div style={{ fontSize:10, color:C.textMuted, textTransform:'uppercase' }}>Currently Reading</div></Card>
+        <Card style={{ textAlign:'center' }}><div style={{ fontSize:20, fontWeight:700, color:C.accent }}>{avgRating||'—'}</div><div style={{ fontSize:10, color:C.textMuted, textTransform:'uppercase' }}>Avg Rating</div></Card>
+      </div>
+      {reading.length>0 && (
+        <Card>
+          <SectionHeading>Currently Reading</SectionHeading>
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {reading.map(b=>(
+              <div key={b.id} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <span style={{ fontSize:15 }}>📖</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, color:C.text }}>{b.title}</div>
+                  <div style={{ fontSize:11, color:C.textMuted }}>{b.author}</div>
+                </div>
+                {b.pages ? (
+                  <div style={{ width:100, height:6, borderRadius:3, background:`${C.pink}40`, overflow:'hidden', flexShrink:0 }}>
+                    <div style={{ height:'100%', borderRadius:3, background:C.rose, width:`${Math.min(100,Math.round((b.currentPage||0)/b.pages*100))}%` }}/>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+      {books.length===0 && <div style={{ fontSize:13.5, color:C.textMuted, fontStyle:'italic', padding:'20px 4px' }}>Add your first book in My Library to see stats here.</div>}
+    </div>
+  );
+};
+
+const BooksPanel = ({ sub }) => {
+  if (sub === 'Recently Deleted') return <TrashPanel type="book" />;
+  if (sub === 'My Library') return <BookLibrary />;
+  return <BooksOverview />;
+};
+
 /* ── AI Agents ──────────────────────────────────────────────────── */
 // Every default agent carries the same permission shape used by the executor:
 // canDelete is always false (hard ceiling, not just a default — no action spec can delete anyway),
@@ -8595,6 +8793,7 @@ const CustomNamesPanel = () => {
     {key:'calendar',label:'Calendar section',default:'Calendar',placeholder:'Timeline, Schedule...'},
     {key:'cosmic',label:'Cosmic section',default:'Cosmic',placeholder:'Universe, Stars, Magic...'},
     {key:'university',label:'University section',default:'University',placeholder:'School, Academy...'},
+    {key:'books',label:'Books section',default:'Books',placeholder:'Library, Reading List...'},
   ];
   return (
     <div className="fade-in" style={{maxWidth:520}}>
@@ -9066,6 +9265,7 @@ const MainContent = ({ navId, sub, onRestoreBiz, onAddVenture }) => (
     {navId==='social'     && <SocialMediaPanel sub={sub} />}
     {navId==='cosmic'     && <CosmicPanel sub={sub} />}
     {navId==='university' && <UniversityPanel sub={sub} />}
+    {navId==='books'      && <BooksPanel sub={sub} />}
     {navId==='agents'     && <AgentsPanel />}
     {navId==='settings'   && <SettingsPanel sub={sub} />}
   </div>
