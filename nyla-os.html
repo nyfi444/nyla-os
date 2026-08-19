@@ -191,6 +191,13 @@ function resolveConflictUseCloud(){
   _applyCloudSnapshot(snapshot,savedAt,user);
 }
 
+// Firestore hard-caps a document at ~1,048,487 bytes. Moodboard pins and Brand mood-board
+// images are stored as base64 data URLs directly in localStorage, so a handful of photos can
+// push the whole snapshot over that limit — every subsequent cloudSave() then fails the same
+// way, producing an endless stream of identical "Sync failed" toasts with no clue why.
+const _FIRESTORE_DOC_LIMIT = 900000; // safety margin under the real ~1,048,487 byte cap
+let _lastSyncFailReason = null; // avoid re-toasting the same diagnosis on every keystroke-triggered retry
+
 async function cloudSave(){
   if(!_fbUser||!_fbDb) return;
   // Never push while a conflict is unresolved — the local copy is known-stale relative to
@@ -204,15 +211,37 @@ async function cloudSave(){
       const k=localStorage.key(i);
       if(k&&k.startsWith('nylaos_')&&k!=='nylaos_cloud_ts') snap[k]=localStorage.getItem(k);
     }
+    const snapshot=JSON.stringify(snap);
+    const sizeBytes=new Blob([snapshot]).size;
+    if(sizeBytes>_FIRESTORE_DOC_LIMIT){
+      _setSyncState({status:'error',user:_fbUser});
+      const reason='oversize';
+      if(_lastSyncFailReason!==reason && typeof toast==='function'){
+        toast(`Sync failed — your data (${(sizeBytes/1024/1024).toFixed(1)}MB) is too large for cloud sync. This is usually Moodboard or Brand images — remove some to re-enable sync.`,'error',6000);
+      }
+      _lastSyncFailReason=reason;
+      return;
+    }
     const savedAt=Date.now();
     await _fbDb.collection('nylaos').doc(_fbUser.uid).set({
-      snapshot:JSON.stringify(snap),savedAt,email:_fbUser.email||''
+      snapshot,savedAt,email:_fbUser.email||''
     });
     _rawLS('nylaos_cloud_ts',String(savedAt));
     _setDirty(false);
     _setSyncState({status:'synced',user:_fbUser});
+    _lastSyncFailReason=null;
     if(typeof toast==='function') toast('Synced to cloud','sync',2000);
-  }catch(e){console.warn('Cloud save:',e);_setSyncState({status:'error',user:_fbUser});if(typeof toast==='function') toast('Sync failed','error');}
+  }catch(e){
+    console.warn('Cloud save:',e);
+    _setSyncState({status:'error',user:_fbUser});
+    const reason=e&&e.code?e.code:'unknown';
+    if(_lastSyncFailReason!==reason && typeof toast==='function'){
+      toast(e&&e.code==='permission-denied' ? 'Sync failed — signed out or not authorized. Try signing in again.'
+        : e&&e.code==='resource-exhausted' ? 'Sync failed — your data is too large for cloud sync.'
+        : `Sync failed${e&&e.message?': '+e.message:''}`, 'error', 5000);
+    }
+    _lastSyncFailReason=reason;
+  }
 }
 
 // Intercept all localStorage writes → auto-sync 2.5s after last change
@@ -1059,7 +1088,7 @@ const SyncButton = () => {
               <div style={{fontSize:11.5,color:C.textMuted,marginBottom:3}}>Signed in as</div>
               <div style={{fontSize:13,color:C.text,fontWeight:500,marginBottom:16,wordBreak:'break-all'}}>{sync.user.email}</div>
               {!online && <div style={{fontSize:11.5,color:C.textMuted,marginBottom:12,lineHeight:1.5}}>You're offline — changes are saved on this device and will sync once you're back online.</div>}
-              <button onClick={()=>{cloudSave();setOpen(false);}}
+              <button onClick={()=>{_lastSyncFailReason=null;cloudSave();setOpen(false);}}
                 style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
                   border:'none',cursor:'pointer',fontSize:13,marginBottom:6}}>↑ Push — save to cloud</button>
               <button onClick={()=>{_cloudLoad(true);setOpen(false);}}
