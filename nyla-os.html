@@ -3421,6 +3421,7 @@ const IdeaBank = () => {
   const [customCats, setCustomCats] = useState(()=>JSON.parse(localStorage.getItem(CK)||'null')||DEFAULT_IDEA_CATS);
   const IDEA_CATEGORIES = [{key:'all',label:'All',color:C.rose}, ...customCats];
   const saveCats = c => { setCustomCats(c); localStorage.setItem(CK,JSON.stringify(c)); };
+  const ideaVentures = [...VENTURES, ...JSON.parse(localStorage.getItem('nylaos_extra_ventures')||'[]')].filter(v=>!JSON.parse(localStorage.getItem('nylaos_trashed_ventures')||'[]').includes(v));
   const [filter, setFilter] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -3806,7 +3807,7 @@ const IdeaBank = () => {
                       <select value={idea.businessArea||''} onChange={e=>updateIdea(idea.id,'businessArea',e.target.value)} title="Business or life area"
                         style={{padding:'4px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:'transparent',color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>
                         <option value="">No business/area</option>
-                        {VENTURES.map(v=><option key={v} value={v}>{v}</option>)}
+                        {ideaVentures.map(v=><option key={v} value={v}>{v}</option>)}
                       </select>
                     </div>
                     {calendarPromptId===idea.id && (
@@ -3847,7 +3848,7 @@ const IdeaBank = () => {
                         </div>
                         <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Related businesses</div>
                         <div style={{display:'flex',gap:5,flexWrap:'wrap',marginBottom:8}}>
-                          {VENTURES.map(v=>{ const on=(idea.relatedBusinessIds||[]).includes(v); return (
+                          {ideaVentures.map(v=>{ const on=(idea.relatedBusinessIds||[]).includes(v); return (
                             <button key={v} onClick={()=>toggleRelatedBusiness(idea,v)} style={{padding:'3px 9px',borderRadius:7,fontSize:10,cursor:'pointer',background:on?`${C.accent}30`:'transparent',border:`0.5px solid ${on?C.accent:C.border}`,color:on?C.accent:C.textMuted}}>{v}</button>
                           ); })}
                         </div>
