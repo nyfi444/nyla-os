@@ -3565,6 +3565,7 @@ const IdeaBank = () => {
     toast('Sent to Agents — pick an agent to continue','info',2200);
   };
   const moveIdea = (idea, category) => { updateIdea(idea.id, 'category', category); toast('Moved','success',1200); };
+  const moveIdeaToBusiness = (idea, biz) => { updateIdea(idea.id, 'businessArea', biz); toast(biz?`Moved to ${biz}`:'Cleared business','success',1200); };
   const archiveIdea = (idea) => { updateIdea(idea.id, 'status', idea.status==='archived'?'new':'archived'); };
 
   const duplicateIdea = (idea) => {
@@ -3599,6 +3600,7 @@ const IdeaBank = () => {
   const [detailsOpenId, setDetailsOpenId] = useState(null);
   const [historyOpenId, setHistoryOpenId] = useState(null);
   const [movePopoverId, setMovePopoverId] = useState(null);
+  const [linkPopoverId, setLinkPopoverId] = useState(null);
   const NB_PAGES_KEY = 'nylaos_nb_pages';
   const notebookPages = JSON.parse(localStorage.getItem(NB_PAGES_KEY)||'[]');
   const toggleRelatedNote = (idea, pageId) => {
@@ -3871,12 +3873,31 @@ const IdeaBank = () => {
                       <button onClick={()=>duplicateIdea(idea)} title="Duplicate" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>⧉ Duplicate</button>
                       <button onClick={()=>setMovePopoverId(movePopoverId===idea.id?null:idea.id)} title="Move" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>↪ Move</button>
                       {movePopoverId===idea.id && (
-                        <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'110%',left:0,zIndex:220,background:C.card,border:`0.5px solid ${C.border}`,borderRadius:10,boxShadow:'0 6px 20px rgba(0,0,0,0.15)',padding:8,minWidth:150}}>
+                        <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'110%',left:0,zIndex:220,background:C.card,border:`0.5px solid ${C.border}`,borderRadius:10,boxShadow:'0 6px 20px rgba(0,0,0,0.15)',padding:8,minWidth:170,maxHeight:320,overflowY:'auto'}}>
                           <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Move to category</div>
                           {IDEA_CATEGORIES.filter(c=>c.key!=='all').map(c=>(
                             <button key={c.key} onClick={()=>{moveIdea(idea,c.key);setMovePopoverId(null);}} style={{display:'block',width:'100%',textAlign:'left',padding:'5px 8px',borderRadius:6,background:'transparent',border:'none',color:C.text,fontSize:11,cursor:'pointer'}}
                               onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}40`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>{c.label}</button>
                           ))}
+                          <div style={{fontSize:10,color:C.textMuted,margin:'8px 0 4px',borderTop:`0.5px solid ${C.border}`,paddingTop:8}}>Move to business</div>
+                          {idea.businessArea && (
+                            <button onClick={()=>{moveIdeaToBusiness(idea,'');setMovePopoverId(null);}} style={{display:'block',width:'100%',textAlign:'left',padding:'5px 8px',borderRadius:6,background:'transparent',border:'none',color:C.textMuted,fontSize:11,cursor:'pointer'}}
+                              onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}40`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>✕ Clear business</button>
+                          )}
+                          {ideaVentures.map(v=>(
+                            <button key={v} onClick={()=>{moveIdeaToBusiness(idea,v);setMovePopoverId(null);}} style={{display:'block',width:'100%',textAlign:'left',padding:'5px 8px',borderRadius:6,background:idea.businessArea===v?`${C.accent}20`:'transparent',border:'none',color:idea.businessArea===v?C.accent:C.text,fontSize:11,cursor:'pointer',fontWeight:idea.businessArea===v?600:400}}
+                              onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}40`} onMouseLeave={e=>e.currentTarget.style.background=idea.businessArea===v?`${C.accent}20`:'transparent'}>{v}</button>
+                          ))}
+                        </div>
+                      )}
+                      <button onClick={()=>setLinkPopoverId(linkPopoverId===idea.id?null:idea.id)} title="Connect to business" style={{padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:10.5,cursor:'pointer'}}>🔗 Connect</button>
+                      {linkPopoverId===idea.id && (
+                        <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'110%',left:0,zIndex:220,background:C.card,border:`0.5px solid ${C.border}`,borderRadius:10,boxShadow:'0 6px 20px rgba(0,0,0,0.15)',padding:8,minWidth:170,maxHeight:320,overflowY:'auto'}}>
+                          <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Connect to business{ideaVentures.length===0?' (none yet)':''}</div>
+                          {ideaVentures.map(v=>{ const on=(idea.relatedBusinessIds||[]).includes(v); return (
+                            <button key={v} onClick={()=>toggleRelatedBusiness(idea,v)} style={{display:'flex',alignItems:'center',gap:6,width:'100%',textAlign:'left',padding:'5px 8px',borderRadius:6,background:on?`${C.accent}20`:'transparent',border:'none',color:on?C.accent:C.text,fontSize:11,cursor:'pointer'}}
+                              onMouseEnter={e=>e.currentTarget.style.background=on?`${C.accent}30`:`${C.pink}40`} onMouseLeave={e=>e.currentTarget.style.background=on?`${C.accent}20`:'transparent'}>{on?'✓':'○'} {v}</button>
+                          ); })}
                         </div>
                       )}
                       <button onClick={()=>archiveIdea(idea)} title={idea.status==='archived'?'Unarchive':'Archive'} style={{padding:'4px 10px',borderRadius:8,background:idea.status==='archived'?`${C.accent}25`:'transparent',border:`0.5px solid ${idea.status==='archived'?C.accent:C.border}`,color:idea.status==='archived'?C.accent:C.textMuted,fontSize:10.5,cursor:'pointer'}}>🗄 {idea.status==='archived'?'Unarchive':'Archive'}</button>
@@ -5988,7 +6009,7 @@ const BusinessPanel = ({ sub, onAddVenture }) => {
       {tab==='Business Plan' && <BusinessPlanEditor storageKey={`biz_plan_${ns}`} title={`${sub} — Business Plan`} />}
       {tab==='Tasks'         && <TasksPanel sub="Today's Tasks" storageKey={`nylaos_tasks_${ns}`} />}
       {tab==='Brand'         && <BrandPanel venture={sub} />}
-      {tab==='Goals'         && <GoalsPanel sub="All Goals" />}
+      {tab==='Goals'         && <GoalsPanel sub="All Goals" venture={sub} />}
     </div>
   );
 };
@@ -6942,12 +6963,13 @@ const GOAL_CAT_COLORS = {
   Financial:'#FFF9C4', Creative:'#FFE0B2', Spiritual:'#E1BEE7', Education:'#B3E5FC',
 };
 
-const GoalsPanel = ({ sub }) => {
+const GoalsPanel = ({ sub, venture }) => {
   const KEY = 'nylaos_goals';
   const now = new Date();
   const curYear = now.getFullYear();
   const curMonth = now.getMonth();
   const curQ = Math.floor(curMonth/3)+1;
+  const goalVentures = [...VENTURES, ...JSON.parse(localStorage.getItem('nylaos_extra_ventures')||'[]')].filter(v=>!JSON.parse(localStorage.getItem('nylaos_trashed_ventures')||'[]').includes(v));
   const [goals, setGoals] = useState(()=>JSON.parse(localStorage.getItem(KEY)||'[]'));
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -6967,7 +6989,7 @@ const GoalsPanel = ({ sub }) => {
 
   useEffect(()=>{ setReflection(localStorage.getItem(reflKey)||''); },[reflKey]);
 
-  const blankForm = () => ({title:'',description:'',targetDate:'',category:'',progress:0,periodType:getPeriodType(),periodValue:periodVal,milestones:[]});
+  const blankForm = () => ({title:'',description:'',targetDate:'',category:'',progress:0,periodType:getPeriodType(),periodValue:periodVal,milestones:[],venture:venture||''});
   const [form, setForm] = useState(blankForm);
   const [newMilestone, setNewMilestone] = useState('');
   useEffect(()=>{ if(!showForm){ setForm(blankForm()); setNewMilestone(''); } },[sub,selYear,selQ,selMonth]);
@@ -6983,7 +7005,7 @@ const GoalsPanel = ({ sub }) => {
   };
   const remove = id => { const g=goals.find(x=>x.id===id); if(g) addToTrash('goal',g.title,g,KEY); save(goals.filter(g=>g.id!==id)); };
   const updateProgress = (id,val) => save(goals.map(g=>g.id===id?{...g,progress:val}:g));
-  const startEdit = g => { setEditId(g.id); setForm({title:g.title,description:g.description||'',targetDate:g.targetDate||'',category:g.category||'',progress:g.progress,periodType:g.periodType||getPeriodType(),periodValue:g.periodValue||periodVal,milestones:g.milestones||[]}); setNewMilestone(''); setShowForm(true); };
+  const startEdit = g => { setEditId(g.id); setForm({title:g.title,description:g.description||'',targetDate:g.targetDate||'',category:g.category||'',progress:g.progress,periodType:g.periodType||getPeriodType(),periodValue:g.periodValue||periodVal,milestones:g.milestones||[],venture:g.venture||''}); setNewMilestone(''); setShowForm(true); };
 
   const toggleMilestone = (goalId, msId) => {
     const updated = goals.map(g => {
@@ -6998,6 +7020,8 @@ const GoalsPanel = ({ sub }) => {
   if(sub==='Recently Deleted') return <TrashPanel type="goal" />;
 
   const filtered = goals.filter(g=>{
+    if (venture) { if ((g.venture||'')!==venture) return false; }
+    else if (g.venture) return false;
     const pt = g.periodType||'yearly';
     if(sub==='Yearly') {
       if(pt==='yearly') return (g.periodValue||String(curYear))===String(selYear);
@@ -7086,6 +7110,7 @@ const GoalsPanel = ({ sub }) => {
             <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:5, flexWrap:'wrap' }}>
               <div style={{ fontSize:14, fontWeight:500, color:C.text }}>{g.title}</div>
               {g.category && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:10, background:catColor+'80', color:C.roseDark }}>{g.category}</span>}
+              {!venture && g.venture && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:10, background:`${C.accent}25`, color:C.accent }}>💼 {g.venture}</span>}
               {g.progress===100 && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:10, background:'#d4edda', color:'#2E7D32' }}>✓ Complete</span>}
               {g.periodType!==getPeriodType() && g.periodValue && (() => {
                 let label = g.periodValue;
@@ -7153,7 +7178,7 @@ const GoalsPanel = ({ sub }) => {
   return (
     <div className="fade-in" style={{ maxWidth:700 }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
-        <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:21, color:C.rose }}>Goals</div>
+        <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:21, color:C.rose }}>{venture?`Goals — ${venture}`:'Goals'}</div>
         <div style={{display:'flex',gap:8}}>
           {total>0 && <ExportMenu title={`${sub} Goals Report`} content={goalsReportText} csvData={[['Title','Progress %','Category'],...filtered.map(g=>[g.title,g.progress,g.category||''])]} />}
           <button onClick={()=>{ setShowForm(s=>!s); setEditId(null); setForm(blankForm()); }} style={{ padding:'8px 18px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13, fontWeight:500, cursor:'pointer' }}>+ New Goal</button>
@@ -7203,6 +7228,15 @@ const GoalsPanel = ({ sub }) => {
                 </select>
               </div>
             </div>
+            {!venture && (
+              <div>
+                <div style={{ fontSize:11.5, color:C.textLight, marginBottom:4 }}>Business</div>
+                <select value={form.venture||''} onChange={e=>setForm(f=>({...f,venture:e.target.value}))} style={{ width:'100%', padding:'8px 12px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13 }}>
+                  <option value="">Personal (not tied to a business)</option>
+                  {goalVentures.map(v=><option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+            )}
             <div>
               <div style={{ fontSize:11.5, color:C.textLight, marginBottom:6 }}>Milestones {form.milestones.length>0&&<span style={{color:C.textMuted}}>({form.milestones.filter(m=>m.done).length}/{form.milestones.length} done)</span>}</div>
               {form.milestones.map(m=>(
