@@ -531,10 +531,17 @@ async function _writeNotebookFile(){
   }catch(e){console.warn('Notebook file write:',e);}
 }
 
+let _signingIn=false;
 async function signInWithGoogle(){
   if(!_fbAuth){alert('Firebase config not filled in yet — see code comments.');return;}
+  if(_signingIn)return; // a click already opened a popup — ignore the duplicate instead of racing it
+  _signingIn=true;
   try{await _fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider());}
-  catch(e){if(e.code!=='auth/popup-closed-by-user')alert('Sign-in failed: '+e.message);}
+  catch(e){
+    if(e.code!=='auth/popup-closed-by-user' && e.code!=='auth/cancelled-popup-request')
+      alert('Sign-in failed: '+e.message);
+  }
+  finally{_signingIn=false;}
 }
 async function fbSignOut(){if(_fbAuth)await _fbAuth.signOut();}
 
