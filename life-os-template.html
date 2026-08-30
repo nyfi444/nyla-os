@@ -760,11 +760,16 @@ const NAV = [
   { id:'university', label:'University', sub:['Dashboard','Upload Syllabus','Courses','Assignments','GPA Calculator','Resources','Recently Deleted'] },
   { id:'books',      label:'Books',      sub:['Overview','My Library','Recently Deleted'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
-  { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
+  { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Chat History','Appearance','Customize Names','Customize Features','Notifications','Backup & Restore'] },
 ];
 // Apply custom names
 const _cn = JSON.parse(localStorage.getItem('nylaos_custom_names')||'{}');
 NAV.forEach(n=>{ if(_cn[n.id]) n.label=_cn[n.id]; });
+// Hide sections the user doesn't want (Home & Settings can't be hidden)
+const _hiddenSections = JSON.parse(localStorage.getItem('nylaos_hidden_sections')||'[]');
+for (let i = NAV.length - 1; i >= 0; i--) {
+  if (_hiddenSections.includes(NAV[i].id) && NAV[i].id !== 'home' && NAV[i].id !== 'settings') NAV.splice(i, 1);
+}
 
 /* ── Constants ──────────────────────────────────────────────────── */
 const toDateKey = (d) => { const dt=d||new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
@@ -8768,6 +8773,49 @@ const CustomNamesPanel = () => {
   );
 };
 
+/* ── Customize Features ─────────────────────────────────────────── */
+const CustomFeaturesPanel = () => {
+  const CK='nylaos_hidden_sections';
+  const [hidden, setHidden] = useState(()=>JSON.parse(localStorage.getItem(CK)||'[]'));
+  const save = arr => { setHidden(arr); localStorage.setItem(CK,JSON.stringify(arr)); };
+  const toggle = id => save(hidden.includes(id) ? hidden.filter(x=>x!==id) : [...hidden,id]);
+  const SECTIONS = [
+    {id:'calendar',label:'Calendar'},
+    {id:'tasks',label:'Tasks'},
+    {id:'period',label:'Period'},
+    {id:'ideas',label:'Ideas'},
+    {id:'notebook',label:'Notebook'},
+    {id:'goals',label:'Goals'},
+    {id:'business',label:'Business'},
+    {id:'social',label:'Social Media'},
+    {id:'cosmic',label:'Cosmic'},
+    {id:'university',label:'University'},
+    {id:'books',label:'Books'},
+    {id:'agents',label:'AI Agents'},
+  ];
+  return (
+    <div className="fade-in" style={{maxWidth:520}}>
+      <PageTitle>Customize Features</PageTitle>
+      <div style={{fontSize:13,color:C.textMuted,marginBottom:20}}>Turn off any sections you don't use — they'll disappear from the sidebar. Your data isn't deleted, so you can turn a section back on any time. Home and Settings are always on.</div>
+      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+        {SECTIONS.map(s=>{
+          const on = !hidden.includes(s.id);
+          return (
+            <Card key={s.id} className="card-hover" style={{padding:'10px 14px',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer'}} onClick={()=>toggle(s.id)}>
+              <div style={{fontSize:13,color:C.text}}>{s.label}</div>
+              <div style={{ width:38, height:22, borderRadius:11, background: on?C.rose:C.border, position:'relative', transition:'all 0.18s', flexShrink:0 }}>
+                <div style={{ width:16, height:16, borderRadius:'50%', background:'#fff', position:'absolute', top:3, left: on?19:3, transition:'all 0.18s', boxShadow:'0 1px 3px rgba(0,0,0,0.2)' }}/>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+      <button onClick={()=>{toast('Features updated — reload to see changes','success');setTimeout(()=>location.reload(),800);}}
+        style={{marginTop:16,padding:'10px 24px',borderRadius:12,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer'}}>Apply & Reload</button>
+    </div>
+  );
+};
+
 /* ── Notifications ──────────────────────────────────────────────── */
 const NotificationsPanel = () => {
   const key = 'nylaos_notif';
@@ -9196,6 +9244,7 @@ const SettingsPanel = ({ sub }) => {
   if (sub==='Chat History')     return <ChatHistoryPanel />;
   if (sub==='Appearance')       return <AppearancePanel />;
   if (sub==='Customize Names')  return <CustomNamesPanel />;
+  if (sub==='Customize Features') return <CustomFeaturesPanel />;
   if (sub==='Notifications')    return <NotificationsPanel />;
   if (sub==='Backup & Restore') return <BackupPanel />;
 
@@ -9707,7 +9756,7 @@ const FloatingChat = () => {
 };
 
 /* ── Mobile More Menu ───────────────────────────────────────────── */
-const PRIMARY_NAV = ['home','calendar','tasks','goals'];
+const PRIMARY_NAV = ['home','calendar','tasks','goals'].filter(id => NAV.some(n=>n.id===id));
 const MobileMoreMenu = ({ activeNav, onNavSelect, onClose }) => {
   const extras = NAV.filter(n => !PRIMARY_NAV.includes(n.id));
   return (
