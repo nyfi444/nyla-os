@@ -1,0 +1,18 @@
+# This repo publishes Nyla OS to nyfi444.github.io/nyla-os/, so it only
+# tracks Nyla OS itself. The other projects in this folder are their own
+# repos (Semester HQ, the marketing site, the Business OS, Veluera), and
+# the notes and PDFs here are private working files.
+.DS_Store
+.claude/
+node_modules/
+
+dashboard/
+lunar-love/
+semester-hq-dashboard/
+semester-hq-site/
+student-planner/
+veluera/
+veluera-theme/
+
+SEMESTER_HQ_*.md
+Semester HQ - *.pdf
