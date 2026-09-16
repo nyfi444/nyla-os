@@ -46,6 +46,10 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+  <!-- Reads whatever you attach to an agent chat: Word, Excel, PowerPoint,
+       OpenDocument, RTF, web pages, text, and photos. Generated from
+       Semester HQ's reader by build-agent-uploads.py. -->
+  <script src="agent-uploads.js"></script>
   <!-- Firebase (cross-device sync) -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -3177,10 +3181,6 @@ const SimpleEditor = ({ sub }) => {
    OS and one phone photo would fill it.
    The picker has no type filter on purpose: filtering is what greys
    out files you can plainly see, HEIC photos worst of all. */
-const PHOTO_MAX_EDGE = 1568;
-const PHOTO_MAX_BYTES = 4.5 * 1024 * 1024;
-const HEIC2ANY_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js';
-
 const photoDb = (() => {
   let _db = null;
   const open = () => new Promise((res, rej) => {
@@ -3206,60 +3206,78 @@ const photoDb = (() => {
   };
 })();
 
-async function photoToDataUrl(file) {
-  let blob = file;
-  // Chrome can't decode HEIC; Safari can. Convert only when we must.
-  if (/^image\/hei[cf]$/i.test(file.type) || /\.(heic|heif)$/i.test(file.name || '')) {
-    if (!window.heic2any) {
-      await new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = HEIC2ANY_SRC; s.onload = resolve; s.onerror = () => reject(new Error('converter unavailable'));
-        document.head.appendChild(s);
-      });
-    }
-    const out = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
-    blob = Array.isArray(out) ? out[0] : out;
-  }
-  const bitmap = await createImageBitmap(blob);
-  const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  // A white floor, so a transparent PNG doesn't become a black rectangle.
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
-  ctx.drawImage(bitmap, 0, 0, w, h);
-  bitmap.close?.();
-  let quality = 0.85, url = canvas.toDataURL('image/jpeg', quality);
-  while (url.length * 0.75 > PHOTO_MAX_BYTES && quality > 0.4) { quality -= 0.15; url = canvas.toDataURL('image/jpeg', quality); }
-  return url;
+const PDF_MAX_BYTES = 25 * 1024 * 1024;
+// Built from the bytes with the type we sniffed, not the one the device
+// reported: a PDF picked from some apps arrives claiming to be nothing at all,
+// and a mislabelled one would be dropped on the way to Claude.
+async function base64DataUrl(file, mediaType) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return `data:${mediaType};base64,${btoa(binary)}`;
 }
 
-// Reads photos back out of IndexedDB so earlier pictures stay part of the
+// Turns one file into something Claude can be shown: a picture, a PDF sent
+// whole, or the text of a document.
+async function readAttachment(file) {
+  const name = file.name || 'file';
+  const kind = await uploadKind(file);
+  if (kind === 'image') return { kind: 'image', name, dataUrl: await imageUploadDataUrl(file, 1568, 0.85) };
+  if (kind === 'pdf') {
+    if (file.size > PDF_MAX_BYTES) throw new Error(`${name} is too big to send. 25MB is the limit for a PDF.`);
+    return { kind: 'pdf', name, dataUrl: await base64DataUrl(file, 'application/pdf') };
+  }
+  const got = await readOneUpload(file, { textOnly: true });
+  const text = (got.text || '').trim();
+  if (!text) throw new Error(`Couldn't find anything to read in ${name}.`);
+  return { kind: 'text', name, text };
+}
+
+// Reads attachments back out of IndexedDB so earlier pictures stay part of the
 // conversation, not just the newest one.
 async function messagesWithPhotos(msgs) {
   const out = [];
   for (const m of msgs) {
     if (m.role !== 'user' || !m.photos || !m.photos.length) { out.push({ role: m.role, content: m.text }); continue; }
     const blocks = [];
+    const documents = [];
     for (const id of m.photos) {
-      const url = await photoDb.load(id).catch(() => null);
-      const match = url && /^data:(image\/[a-z+]+);base64,(.*)$/i.exec(url);
-      if (match) blocks.push({ type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } });
+      const saved = await photoDb.load(id).catch(() => null);
+      if (!saved) continue;
+      // Older chats saved a plain data URL for a photo; newer ones save the
+      // whole attachment. Both still open.
+      const a = typeof saved === 'string' ? { kind: 'image', dataUrl: saved, name: 'photo' } : saved;
+      if (a.kind === 'image') {
+        const match = /^data:(image\/[a-z+]+);base64,(.*)$/i.exec(a.dataUrl || '');
+        if (match) blocks.push({ type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } });
+      } else if (a.kind === 'pdf') {
+        const match = /^data:application\/pdf;base64,(.*)$/i.exec(a.dataUrl || '');
+        if (match) blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: match[1] } });
+      } else if (a.text) {
+        documents.push(`--- ${a.name} ---\n${a.text}`);
+      }
     }
-    blocks.push({ type: 'text', text: m.text || 'Have a look at this.' });
+    const said = m.text || 'Have a look at this.';
+    blocks.push({ type: 'text', text: documents.length ? `${said}\n\n${documents.join('\n\n')}` : said });
     out.push({ role: 'user', content: blocks });
   }
   return out;
 }
 
-// A thumbnail that fills itself in from IndexedDB once it's on screen.
+// An attachment that fills itself in from IndexedDB once it's on screen:
+// the picture itself, or a small chip naming the document.
 function ChatPhoto({ id, size }) {
-  const [src, setSrc] = React.useState(null);
-  React.useEffect(() => { let alive = true; photoDb.load(id).then(u => { if (alive) setSrc(u || null); }).catch(()=>{}); return () => { alive = false; }; }, [id]);
-  if (!src) return null;
-  return <img src={src} alt="Photo you sent" style={{ maxWidth:size||170, maxHeight:size||170, borderRadius:9, display:'block', marginBottom:4 }}/>;
+  const [att, setAtt] = React.useState(null);
+  React.useEffect(() => { let alive = true; photoDb.load(id).then(a => { if (alive) setAtt(a || null); }).catch(()=>{}); return () => { alive = false; }; }, [id]);
+  if (!att) return null;
+  const a = typeof att === 'string' ? { kind:'image', dataUrl:att, name:'photo' } : att;
+  if (a.kind === 'image') return <img src={a.dataUrl} alt="Photo you sent" style={{ maxWidth:size||170, maxHeight:size||170, borderRadius:9, display:'block', marginBottom:4 }}/>;
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap:6, padding:'5px 10px', borderRadius:8, background:'rgba(255,255,255,.35)', marginBottom:4, fontSize:11 }}>
+      <span style={{ fontSize:9, letterSpacing:.5, opacity:.7 }}>{a.kind === 'pdf' ? 'PDF' : 'DOC'}</span>
+      <span>{a.name}</span>
+    </span>
+  );
 }
 
 /* ── PDF IndexedDB Storage ──────────────────────────────────────── */
@@ -8413,14 +8431,14 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
   const addPhotos = async (files) => {
     const list = Array.from(files||[]);
     for (const file of list) {
-      if (photos.length>=5) { alert('Five photos at a time is the limit.'); break; }
+      if (photos.length>=5) { alert('Five files at a time is the limit.'); break; }
       try {
-        const dataUrl = await photoToDataUrl(file);
-        const id = 'agentimg-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
-        await photoDb.save(id, dataUrl);
-        setPhotos(p=>[...p,{ id, dataUrl, name:file.name||'photo' }]);
+        const att = await readAttachment(file);
+        const id = 'agentatt-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+        await photoDb.save(id, att);
+        setPhotos(p=>[...p,{ ...att, id }]);
       } catch(err) {
-        alert(`Couldn't read ${file.name||'that file'}${/hei[cf]/i.test(file.name||'')?' — try sharing it as a JPEG':''}.`);
+        alert(err?.message || `Couldn't read ${file.name||'that file'}.`);
       }
     }
   };
@@ -8506,7 +8524,12 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
         <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:7 }}>
           {photos.map(p=>(
             <span key={p.id} style={{ position:'relative', display:'inline-block' }}>
-              <img src={p.dataUrl} alt={p.name} style={{ width:48, height:48, objectFit:'cover', borderRadius:8, border:`0.5px solid ${C.border}` }}/>
+              {p.kind==='image'
+                ? <img src={p.dataUrl} alt={p.name} style={{ width:48, height:48, objectFit:'cover', borderRadius:8, border:`0.5px solid ${C.border}` }}/>
+                : <span title={p.name} style={{ display:'flex', alignItems:'center', gap:6, height:48, maxWidth:170, padding:'0 10px', borderRadius:8, border:`0.5px solid ${C.border}`, background:C.pinkLight }}>
+                    <span style={{ fontSize:9, letterSpacing:.5, color:C.textMuted }}>{p.kind==='pdf'?'PDF':'DOC'}</span>
+                    <span style={{ fontSize:11, color:C.rose, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.name}</span>
+                  </span>}
               <button onClick={()=>removePhoto(p.id)} aria-label="Remove photo"
                 style={{ position:'absolute', top:-5, right:-5, width:17, height:17, borderRadius:'50%', border:'none', background:C.rose, color:'#fff', fontSize:10, lineHeight:1, cursor:'pointer' }}>×</button>
             </span>
@@ -8516,7 +8539,7 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
       <div style={{ display:'flex', gap:6 }}>
         {/* No accept filter: filtering by type is what greys out files in the picker. */}
         <input type="file" multiple ref={fileRef} style={{ display:'none' }} onChange={e=>{ addPhotos(e.target.files); e.target.value=''; }}/>
-        <button onClick={()=>fileRef.current?.click()} disabled={loading} title="Add a photo"
+        <button onClick={()=>fileRef.current?.click()} disabled={loading} title="Add a file"
           style={{ padding:'7px 10px', borderRadius:9, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13, cursor:'pointer' }}>◑</button>
         <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
           onPaste={e=>{ const f=Array.from(e.clipboardData?.files||[]); if(f.length){ e.preventDefault(); addPhotos(f); } }}
