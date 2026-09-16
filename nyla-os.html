@@ -13,6 +13,34 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Nyla OS" />
   <meta name="mobile-web-app-capable" content="yes" />
+<!-- Launch screens: the cover you see for a moment when the app opens from a home screen. -->
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/750x1334.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/828x1792.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/1125x2436.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/1170x2532.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/1179x2556.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/1206x2622.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/1284x2778.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/1290x2796.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/1320x2868.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/1536x2048.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 810px) and (device-height: 1080px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/1620x2160.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/1640x2360.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/1668x2388.png" />
+<link rel="apple-touch-startup-image" media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/2048x2732.png" />
+<style>
+/* The cover itself, for app windows that don't use the images above. */
+#app-cover { position: fixed; inset: 0; z-index: 2147483600; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; background: radial-gradient(circle at 50% 46%, #e39abd, #c4607a 66%); color: #faf8f6;
+  font-family: 'DM Serif Display', Didot, Georgia, serif; transition: opacity .45s ease; }
+#app-cover.ac-gone { opacity: 0; pointer-events: none; }
+#app-cover .ac-mark { position: relative; font-size: clamp(64px, 17vw, 104px); line-height: 1; }
+#app-cover .ac-mark i { position: absolute; top: .02em; right: -.42em; font-size: .27em; font-style: normal; color: #faf8f6; }
+#app-cover .ac-word { margin-top: 14px; font-size: clamp(19px, 5.4vw, 26px); opacity: .94; }
+#app-cover .ac-spark { position: absolute; color: #faf8f6; opacity: .8; animation: acTwinkle 2.6s ease-in-out infinite; }
+@keyframes acTwinkle { 0%, 100% { opacity: .28; transform: scale(.85); } 50% { opacity: .9; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { #app-cover .ac-spark { animation: none; opacity: .6; } }
+</style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -64,6 +92,28 @@
   </style>
 </head>
 <body>
+<div id="app-cover" aria-hidden="true">
+  <span class="ac-spark" style="top:26%;left:18%;font-size:26px">&#10022;</span>
+  <span class="ac-spark" style="top:34%;right:16%;font-size:17px;animation-delay:.7s">&#10022;</span>
+  <span class="ac-spark" style="bottom:31%;left:24%;font-size:15px;animation-delay:1.3s">&#10022;</span>
+  <span class="ac-spark" style="bottom:27%;right:21%;font-size:22px;animation-delay:.4s">&#10022;</span>
+  <div class="ac-mark">N<i>&#10022;</i></div>
+  <div class="ac-word">Nyla OS</div>
+</div>
+<script>
+(function () {
+  var cover = document.getElementById('app-cover');
+  if (!cover) return;
+  // Only when opened as an installed app; a browser tab doesn't need a cover.
+  // Add ?cover=1 to the address to see it anywhere.
+  var asApp = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true
+    || location.search.indexOf('cover=1') > -1;
+  if (!asApp) { cover.remove(); return; }
+  var hide = function () { cover.classList.add('ac-gone'); setTimeout(function () { cover.remove(); }, 500); };
+  window.addEventListener('load', function () { setTimeout(hide, 420); });
+  setTimeout(hide, 4000); // never leave anyone stuck behind it
+})();
+</script>
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
