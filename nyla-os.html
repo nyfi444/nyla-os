@@ -3170,6 +3170,98 @@ const SimpleEditor = ({ sub }) => {
   );
 };
 
+/* ── Photos for agent chats ─────────────────────────────────────────
+   Show an agent a screenshot, a whiteboard, a receipt, a photo of a
+   page. Pictures are shrunk to what Claude actually reads (1568px on
+   the long side) and kept in IndexedDB — localStorage holds the whole
+   OS and one phone photo would fill it.
+   The picker has no type filter on purpose: filtering is what greys
+   out files you can plainly see, HEIC photos worst of all. */
+const PHOTO_MAX_EDGE = 1568;
+const PHOTO_MAX_BYTES = 4.5 * 1024 * 1024;
+const HEIC2ANY_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js';
+
+const photoDb = (() => {
+  let _db = null;
+  const open = () => new Promise((res, rej) => {
+    if (_db) return res(_db);
+    const req = indexedDB.open('nylaos_photo_store', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('photos');
+    req.onsuccess = e => { _db = e.target.result; res(_db); };
+    req.onerror = rej;
+  });
+  return {
+    save: async (key, dataUrl) => {
+      const d = await open();
+      return new Promise((res, rej) => { const tx=d.transaction('photos','readwrite'); tx.objectStore('photos').put(dataUrl,key); tx.oncomplete=res; tx.onerror=rej; });
+    },
+    load: async (key) => {
+      const d = await open();
+      return new Promise((res, rej) => { const req=d.transaction('photos','readonly').objectStore('photos').get(key); req.onsuccess=e=>res(e.target.result); req.onerror=rej; });
+    },
+    del: async (key) => {
+      const d = await open();
+      return new Promise((res, rej) => { const tx=d.transaction('photos','readwrite'); tx.objectStore('photos').delete(key); tx.oncomplete=res; tx.onerror=rej; });
+    },
+  };
+})();
+
+async function photoToDataUrl(file) {
+  let blob = file;
+  // Chrome can't decode HEIC; Safari can. Convert only when we must.
+  if (/^image\/hei[cf]$/i.test(file.type) || /\.(heic|heif)$/i.test(file.name || '')) {
+    if (!window.heic2any) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = HEIC2ANY_SRC; s.onload = resolve; s.onerror = () => reject(new Error('converter unavailable'));
+        document.head.appendChild(s);
+      });
+    }
+    const out = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+    blob = Array.isArray(out) ? out[0] : out;
+  }
+  const bitmap = await createImageBitmap(blob);
+  const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  // A white floor, so a transparent PNG doesn't become a black rectangle.
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  let quality = 0.85, url = canvas.toDataURL('image/jpeg', quality);
+  while (url.length * 0.75 > PHOTO_MAX_BYTES && quality > 0.4) { quality -= 0.15; url = canvas.toDataURL('image/jpeg', quality); }
+  return url;
+}
+
+// Reads photos back out of IndexedDB so earlier pictures stay part of the
+// conversation, not just the newest one.
+async function messagesWithPhotos(msgs) {
+  const out = [];
+  for (const m of msgs) {
+    if (m.role !== 'user' || !m.photos || !m.photos.length) { out.push({ role: m.role, content: m.text }); continue; }
+    const blocks = [];
+    for (const id of m.photos) {
+      const url = await photoDb.load(id).catch(() => null);
+      const match = url && /^data:(image\/[a-z+]+);base64,(.*)$/i.exec(url);
+      if (match) blocks.push({ type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } });
+    }
+    blocks.push({ type: 'text', text: m.text || 'Have a look at this.' });
+    out.push({ role: 'user', content: blocks });
+  }
+  return out;
+}
+
+// A thumbnail that fills itself in from IndexedDB once it's on screen.
+function ChatPhoto({ id, size }) {
+  const [src, setSrc] = React.useState(null);
+  React.useEffect(() => { let alive = true; photoDb.load(id).then(u => { if (alive) setSrc(u || null); }).catch(()=>{}); return () => { alive = false; }; }, [id]);
+  if (!src) return null;
+  return <img src={src} alt="Photo you sent" style={{ maxWidth:size||170, maxHeight:size||170, borderRadius:9, display:'block', marginBottom:4 }}/>;
+}
+
 /* ── PDF IndexedDB Storage ──────────────────────────────────────── */
 const pdfDb = (() => {
   let _db = null;
@@ -8289,6 +8381,8 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
   const [chatOpen, setChatOpen] = useState(false);
   const [msgs, setMsgs] = useState([{role:'assistant',text:`Hi Nyla! I'm your ${agent.name}. How can I help you today? ✦`}]);
   const [input, setInput] = useState('');
+  const [photos, setPhotos] = useState([]);   // waiting to be sent; ids point into photoDb
+  const fileRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [pendingPlan, setPendingPlan] = useState(null); // {msgIndex, steps}
@@ -8316,20 +8410,37 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
     }
   },[]);
 
+  const addPhotos = async (files) => {
+    const list = Array.from(files||[]);
+    for (const file of list) {
+      if (photos.length>=5) { alert('Five photos at a time is the limit.'); break; }
+      try {
+        const dataUrl = await photoToDataUrl(file);
+        const id = 'agentimg-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+        await photoDb.save(id, dataUrl);
+        setPhotos(p=>[...p,{ id, dataUrl, name:file.name||'photo' }]);
+      } catch(err) {
+        alert(`Couldn't read ${file.name||'that file'}${/hei[cf]/i.test(file.name||'')?' — try sharing it as a JPEG':''}.`);
+      }
+    }
+  };
+  const removePhoto = id => { photoDb.del(id).catch(()=>{}); setPhotos(p=>p.filter(x=>x.id!==id)); };
+
   const send = async () => {
-    if(!input.trim()||loading) return;
+    if((!input.trim()&&!photos.length)||loading) return;
     const key=localStorage.getItem('nylaos_api_key');
     if(!key){alert('Add your API key in Settings → API Keys first');return;}
     if(!sessionId.current) sessionId.current=Date.now();
     const userText=input.trim();
-    const history=[...msgs,{role:'user',text:userText}];
-    setMsgs(history); setInput(''); setLoading(true); setErrorState(false); setJustCompleted(false);
+    const sent=photos.map(p=>p.id);
+    const history=[...msgs,{role:'user',text:userText,photos:sent.length?sent:undefined}];
+    setMsgs(history); setInput(''); setPhotos([]); setLoading(true); setErrorState(false); setJustCompleted(false);
     try {
       const agentSystem=agent.systemPrompt+buildAgentContext(agent.name)+AGENT_ACTION_DOCS;
       const res=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1024,system:agentSystem,messages:history.map(m=>({role:m.role,content:m.text}))}),
+        body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1024,system:agentSystem,messages:await messagesWithPhotos(history)}),
       });
       const data=await res.json();
       const reply=data.content?.[0]?.text||'Sorry, I had trouble with that.';
@@ -8372,7 +8483,9 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
       <div style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
         <div style={{ maxWidth:'86%', padding:'8px 12px', borderRadius:12, fontSize:12.5, lineHeight:1.6,
           background:m.role==='user'?C.rose:`${C.lavender}CC`, color:m.role==='user'?'#fff':C.rose,
-          borderBottomRightRadius:m.role==='user'?3:12, borderBottomLeftRadius:m.role==='assistant'?3:12, whiteSpace:'pre-wrap' }}>{m.role==='assistant'?stripAgentCmd(m.text):m.text}</div>
+          borderBottomRightRadius:m.role==='user'?3:12, borderBottomLeftRadius:m.role==='assistant'?3:12, whiteSpace:'pre-wrap' }}>
+          {(m.photos||[]).map(id=><ChatPhoto key={id} id={id}/>)}
+          {m.role==='assistant'?stripAgentCmd(m.text):m.text}</div>
       </div>
       {m.batchResults && !undoneBatch.has(i) && (
         <div style={{display:'flex',justifyContent:'flex-start'}}>
@@ -8388,13 +8501,31 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
   </>);
 
   const renderInput = () => (
-    <div style={{ padding:'8px 10px', borderTop:`0.5px solid ${C.border}`, display:'flex', gap:6, background:C.cream }}>
-      <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
-        placeholder={`Message ${agent.name}...`}
-        style={{ flex:1, padding:'7px 11px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12 }}/>
-      <button onClick={()=>setFullscreen(f=>!f)} title={fullscreen?'Exit fullscreen':'Fullscreen'}
-        style={{ padding:'7px 10px', borderRadius:9, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13, cursor:'pointer' }}>⤢</button>
-      <button onClick={send} disabled={loading} style={{ padding:'7px 13px', borderRadius:9, background:C.rose, color:'#fff', border:'none', fontSize:13, cursor:'pointer' }}>↑</button>
+    <div style={{ padding:'8px 10px', borderTop:`0.5px solid ${C.border}`, background:C.cream }}>
+      {photos.length>0 && (
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:7 }}>
+          {photos.map(p=>(
+            <span key={p.id} style={{ position:'relative', display:'inline-block' }}>
+              <img src={p.dataUrl} alt={p.name} style={{ width:48, height:48, objectFit:'cover', borderRadius:8, border:`0.5px solid ${C.border}` }}/>
+              <button onClick={()=>removePhoto(p.id)} aria-label="Remove photo"
+                style={{ position:'absolute', top:-5, right:-5, width:17, height:17, borderRadius:'50%', border:'none', background:C.rose, color:'#fff', fontSize:10, lineHeight:1, cursor:'pointer' }}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ display:'flex', gap:6 }}>
+        {/* No accept filter: filtering by type is what greys out files in the picker. */}
+        <input type="file" multiple ref={fileRef} style={{ display:'none' }} onChange={e=>{ addPhotos(e.target.files); e.target.value=''; }}/>
+        <button onClick={()=>fileRef.current?.click()} disabled={loading} title="Add a photo"
+          style={{ padding:'7px 10px', borderRadius:9, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13, cursor:'pointer' }}>◑</button>
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&send()} disabled={loading}
+          onPaste={e=>{ const f=Array.from(e.clipboardData?.files||[]); if(f.length){ e.preventDefault(); addPhotos(f); } }}
+          placeholder={photos.length?'Add a note about it…':`Message ${agent.name}...`}
+          style={{ flex:1, padding:'7px 11px', borderRadius:9, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.rose, fontSize:12 }}/>
+        <button onClick={()=>setFullscreen(f=>!f)} title={fullscreen?'Exit fullscreen':'Fullscreen'}
+          style={{ padding:'7px 10px', borderRadius:9, background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13, cursor:'pointer' }}>⤢</button>
+        <button onClick={send} disabled={loading} style={{ padding:'7px 13px', borderRadius:9, background:C.rose, color:'#fff', border:'none', fontSize:13, cursor:'pointer' }}>↑</button>
+      </div>
     </div>
   );
 

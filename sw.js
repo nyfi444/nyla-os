@@ -7,7 +7,7 @@
 
    Bump VERSION when you change the app, so old caches are cleared.
 ──────────────────────────────────────────────────────────────── */
-const VERSION = 'nyla-os-2026-09-15-1';
+const VERSION = 'nyla-os-2026-09-16-1';
 const APP_SHELL = [
   './nyla-os.html', './manifest.webmanifest', './pwa.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
