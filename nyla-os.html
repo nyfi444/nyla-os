@@ -1604,9 +1604,24 @@ const QUICK_LINKS = [
   { label:'Shopify',      url:'https://shopify.com',                emoji:'🛍️' },
 ];
 const QL_KEY = 'nylaos_quick_links';
+// Links added after launch. They're appended once to a saved list too, so
+// someone who already edited their links still gets them (and can remove them).
+const ADDED_QUICK_LINKS = [
+  { key:'shq_biz_v1',  label:'Semester HQ OS',   url:'https://biz.semester-hq.com', emoji:'🗂️' },
+  { key:'shq_site_v1', label:'Semester HQ Site', url:'https://semester-hq.com',     emoji:'🌐' },
+  { key:'shq_app_v1',  label:'Semester HQ App',  url:'https://app.semester-hq.com', emoji:'🎓' },
+];
 const loadQuickLinks = () => {
   const saved = JSON.parse(localStorage.getItem(QL_KEY)||'null');
-  return saved || QUICK_LINKS.map((l,i)=>({ ...l, id:i+1 }));
+  let links = saved || QUICK_LINKS.map((l,i)=>({ ...l, id:i+1 }));
+  const seen = JSON.parse(localStorage.getItem('nylaos_quick_links_added')||'[]');
+  const fresh = ADDED_QUICK_LINKS.filter(l=>!seen.includes(l.key));
+  if (fresh.length) {
+    fresh.forEach((l,i)=>{ if (!links.some(x=>x.url.replace(/\/$/,'')===l.url)) links = [...links, { label:l.label, url:l.url, emoji:l.emoji, id:Date.now()+i }]; });
+    localStorage.setItem(QL_KEY, JSON.stringify(links));
+    localStorage.setItem('nylaos_quick_links_added', JSON.stringify([...seen, ...fresh.map(l=>l.key)]));
+  }
+  return links;
 };
 const normalizeUrl = u => { const t=u.trim(); if(!t) return ''; return /^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`; };
 const linkHost = u => { try { return new URL(u).hostname.replace(/^www\./,''); } catch(e) { return ''; } };
