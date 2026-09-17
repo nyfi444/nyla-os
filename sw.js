@@ -7,12 +7,12 @@
 
    Bump VERSION when you change the app, so old caches are cleared.
 ──────────────────────────────────────────────────────────────── */
-const VERSION = 'nyla-os-2026-09-16-2';
+const VERSION = 'nyla-os-2026-09-17-1';
 const APP_SHELL = [
   './nyla-os.html', './agent-uploads.js', './manifest.webmanifest', './pwa.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
-const CDN_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'unpkg.com', 'cdnjs.cloudflare.com', 'www.gstatic.com'];
+const CDN_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'unpkg.com', 'cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'www.gstatic.com'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(VERSION).then(cache => Promise.all(
