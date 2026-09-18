@@ -520,6 +520,14 @@ const VAULT_OUT = '06 From Nyla OS';
   const SECRET_BODY  = /\b(sk-ant-[A-Za-z0-9_-]{8}|sk_live_[A-Za-z0-9]{8}|sk_test_[A-Za-z0-9]{8}|rk_live_[A-Za-z0-9]{8}|AIza[A-Za-z0-9_-]{20}|ghp_[A-Za-z0-9]{20}|xox[baprs]-[A-Za-z0-9-]{10}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/;
   const holdsSecrets = (name, body) => SECRET_TITLE.test(String(name||'')) || SECRET_TITLE_EXACT.test(String(name||'')) || SECRET_BODY.test(String(body||''));
 
+  /* Skipping whole pages is not enough on its own: an idea or a goal's notes
+     can carry a key without anything in the title hinting at it. Everything
+     written is scrubbed at the point of writing, so the guard cannot be
+     forgotten by a later caller. Safe on the JSON snapshot too — the
+     replacement stays inside the string it replaces. */
+  const KEYLIKE = /(sk-ant-[A-Za-z0-9_-]{8,}|sk_live_[A-Za-z0-9]{8,}|sk_test_[A-Za-z0-9]{8,}|rk_live_[A-Za-z0-9]{8,}|pk_live_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9]{8,}|AIza[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)/g;
+  const vaultScrub = t => String(t==null?'':t).replace(KEYLIKE,'[redacted by the vault sync]');
+
   /* Notebook pages are contenteditable HTML. Stripping to plain text (what the
      old single-file export did) threw away every heading, list and link, so
      this keeps the structure as real markdown instead. */
@@ -629,7 +637,7 @@ const VAULT_OUT = '06 From Nyla OS';
       const d=await Vault.dir(parts.join('/'),true);
       const fh=await d.getFileHandle(file,{create:true});
       const w=await fh.createWritable();
-      await w.write(text);
+      await w.write(vaultScrub(text));
       await w.close();
     },
 
