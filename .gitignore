@@ -16,3 +16,6 @@ veluera-theme/
 
 SEMESTER_HQ_*.md
 Semester HQ - *.pdf
+
+# Personal utility, not part of the published app.
+move-vault-to-icloud.sh
