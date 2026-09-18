@@ -168,14 +168,24 @@ const { useState, useEffect, useRef, useCallback, createContext, useContext } = 
    Fable, server-side fallbacks retry a declined request on another model;
    if an account rejects that option, we retry once without it. */
 const AI_MODEL = 'claude-sonnet-5';
+/* The Anthropic key is not in this page any more. It lives as a secret on
+   a small Worker of Nyla's own, which verifies the Firebase ID token this
+   page already has from Google sign-in before it will talk to Claude.
+   That is why AI now needs her to be signed in: the sign-in is the only
+   thing proving it is her, on a site that is otherwise public. */
+const AI_PROXY = 'https://nyla-os-ai.semesterhq.workers.dev/v1/messages';
+
 const callClaude = async ({ system, messages, maxTokens=8000, effort='medium' }) => {
-  const key = localStorage.getItem('nylaos_api_key');
-  if (!key) throw new Error('Add your Anthropic API key in Settings → API Keys first.');
+  if (!_fbUser) throw new Error('Sign in (top right) to use AI — your Claude key lives on your server now, and signing in is what proves it is you.');
+  let idToken;
+  // Firebase refreshes this itself when it is close to expiring.
+  try { idToken = await _fbUser.getIdToken(); }
+  catch(e) { throw new Error('Could not confirm your sign-in. Sign out and back in, then try again.'); }
   const send = async (withFallback) => {
-    const headers = { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' };
+    const headers = { 'Content-Type':'application/json', 'Authorization':`Bearer ${idToken}` };
     const body = { model:AI_MODEL, max_tokens:maxTokens, system, messages, output_config:{ effort } };
-    if (withFallback) { headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; body.fallbacks = 'default'; }
-    return fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers, body:JSON.stringify(body) });
+    if (withFallback) { body.fallbacks = 'default'; }
+    return fetch(AI_PROXY, { method:'POST', headers, body:JSON.stringify(body) });
   };
   // Server-side fallbacks only apply to the Opus 5 / Fable tier.
   const fallbackCapable = /opus-5|fable/.test(AI_MODEL);
@@ -187,7 +197,9 @@ const callClaude = async ({ system, messages, maxTokens=8000, effort='medium' })
   const data = await res.json().catch(()=>({}));
   if (!res.ok) {
     const msg = data.error?.message || `HTTP ${res.status}`;
-    if (res.status===401) throw new Error('That API key was rejected — check it in Settings → API Keys.');
+    if (res.status===401) throw new Error(msg || 'Your sign-in expired — sign in again to use AI.');
+    if (res.status===403) throw new Error(msg || 'This account is not allowed to use Nyla OS AI.');
+    if (res.status===503) throw new Error('No Claude key is set on your AI Worker yet.');
     if (res.status===429) throw new Error('Rate limited for a moment — try again in a few seconds.');
     throw new Error(msg);
   }
@@ -195,6 +207,19 @@ const callClaude = async ({ system, messages, maxTokens=8000, effort='medium' })
   if (data.stop_reason === 'refusal' && !text) throw new Error('Claude declined to answer that one.');
   return text || '(no reply)';
 };
+
+/* The key used to live in localStorage, which means it also rode the cloud
+   sync to every device. It is on the Worker now, so every old copy goes.
+   This runs on every load, not once: a pull from a device that hasn't
+   updated yet can put one back. */
+(function purgeStoredApiKey(){
+  try{
+    if(localStorage.getItem('nylaos_api_key')){
+      localStorage.removeItem('nylaos_api_key');
+      console.info('Anthropic key removed from this browser; it lives on your Worker now.');
+    }
+  }catch(e){}
+})();
 
 /* ── Toast Notification System ─────────────────────────────────────── */
 let _toastListeners = [];
@@ -1349,7 +1374,7 @@ const NAV = [
   { id:'university', label:'University', sub:['Dashboard','Upload Syllabus','Courses','Assignments','GPA Calculator','Resources','Recently Deleted'] },
   { id:'books',      label:'Books',      sub:['Overview','My Library','Recently Deleted'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
-  { id:'settings',   label:'Settings',   sub:['Profile','API Keys','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
+  { id:'settings',   label:'Settings',   sub:['Profile','AI Connection','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
 ];
 // Apply custom names
 const _cn = JSON.parse(localStorage.getItem('nylaos_custom_names')||'{}');
@@ -3732,8 +3757,7 @@ const BrainDump = () => {
 
   const analyze = async () => {
     if(!text.trim()) return;
-    const key = localStorage.getItem('nylaos_api_key');
-    if(!key){ toast('Add your API key in Settings → API Keys first','error'); return; }
+    if(!_fbUser){ toast('Sign in (top right) to use AI','error'); return; }
     setLoading(true);
     try {
       const sys = `You are a brain-dump triage assistant. The user gives you a messy, unstructured stream of thoughts (typed or spoken). Split it into distinct items and reply with STRICT JSON only — no markdown fences, no commentary — in exactly this shape:
@@ -9710,8 +9734,7 @@ const SYLLABUS_EXTRACT_SYSTEM = `You extract structured data from a college syll
 }`;
 
 const parseSyllabusText = async text => {
-  const key = localStorage.getItem('nylaos_api_key');
-  if(!key) throw new Error('Add your API key in Settings → API Keys first');
+  if(!_fbUser) throw new Error('Sign in (top right) to use AI');
   const raw = await callClaude({ system:SYLLABUS_EXTRACT_SYSTEM, messages:[{role:'user', content:text}], maxTokens:12000, effort:'low' });
   const jsonStr = raw.match(/\{[\s\S]*\}/)?.[0] || '{}';
   return JSON.parse(jsonStr);
@@ -10388,7 +10411,7 @@ const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
 
   const send = async () => {
     if((!input.trim()&&!att.items.length)||loading) return;
-    if(!localStorage.getItem('nylaos_api_key')){ toast('Add your API key in Settings → API Keys first','error'); return; }
+    if(!_fbUser){ toast('Sign in (top right) to use AI','error'); return; }
     if(!sessionId.current) sessionId.current=Date.now();
     const userText=input.trim();
     const sent=att.take();
@@ -10528,20 +10551,21 @@ const AgentsChat = () => {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [apiKey, setApiKey] = useState(()=>localStorage.getItem('nylaos_api_key')||'');
-  const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('nylaos_api_key'));
+  const [apiKey, setApiKey] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const sessionId = useRef(null);
   const endRef = useRef(null);
 
   useEffect(()=>endRef.current?.scrollIntoView({behavior:'smooth'}),[msgs,loading,fullscreen]);
 
-  const saveKey = k => { setApiKey(k); localStorage.setItem('nylaos_api_key',k); if(k) setShowKeyInput(false); };
+  // Kept so the old key row still has a handler; it stores nothing now.
+  const saveKey = () => setShowKeyInput(false);
 
   const att = useAttachments();
   const send = async () => {
     if ((!input.trim()&&!att.items.length)||loading) return;
-    if (!localStorage.getItem('nylaos_api_key')) { setShowKeyInput(true); return; }
+    if (!_fbUser) { toast('Sign in (top right) to use AI','error'); return; }
     const ids = att.take();
     const history = [...msgs, { role:'user', text:input.trim(), photos: ids.length?ids:undefined }];
     setMsgs(history); setInput(''); setLoading(true);
@@ -11379,40 +11403,34 @@ const ChatHistoryPanel = () => {
 };
 
 const ApiKeyPanel = () => {
-  const [apiKey, setApiKey] = useState(()=>localStorage.getItem('nylaos_api_key')||'');
-  const [saved, setSaved] = useState(()=>!!localStorage.getItem('nylaos_api_key'));
-  const [show, setShow] = useState(false);
   const [test, setTest] = useState(null); // null | 'testing' | {ok, msg}
-  const save = () => {
-    const k = apiKey.trim();
-    if (k) { localStorage.setItem('nylaos_api_key', k); setSaved(true); toast('API key saved','success',1400); }
-    else { localStorage.removeItem('nylaos_api_key'); setSaved(false); toast('API key removed','info',1400); }
-    setTest(null);
-  };
+  const [signedIn, setSignedIn] = useState(()=>!!_fbUser);
+  useEffect(()=>{ const id=setInterval(()=>setSignedIn(!!_fbUser),1500); return()=>clearInterval(id); },[]);
   const runTest = async () => {
-    save(); setTest('testing');
+    setTest('testing');
     try { await callClaude({ system:'Reply with the single word: ready', messages:[{ role:'user', content:'ping' }], maxTokens:2000, effort:'low' }); setTest({ ok:true, msg:'Connected — your agents and AI features are ready.' }); }
     catch(e) { setTest({ ok:false, msg:e.message }); }
   };
   return (
     <div className="fade-in" style={{ maxWidth:560 }}>
-      <PageTitle subtitle="Powers agents, chats, brain dump, captions and cosmic readings">API Keys</PageTitle>
+      <PageTitle subtitle="Powers agents, chats, brain dump, captions and cosmic readings">AI Connection</PageTitle>
       <Card>
-        <SectionHeading>Anthropic API key</SectionHeading>
-        <div style={{ fontSize:13, color:C.textLight, marginBottom:12, lineHeight:1.6 }}>
-          Get one at console.anthropic.com. It's saved with the rest of your Nyla OS data, including your private cloud sync when you're signed in. AI features use {AI_MODEL.replace('claude-','Claude ').replace('-',' ').replace(/\b\w/g,c=>c.toUpperCase())}.
+        <SectionHeading>Your key is on your server</SectionHeading>
+        <div style={{ fontSize:13, color:C.textLight, marginBottom:14, lineHeight:1.7 }}>
+          Nyla OS used to keep your Anthropic key in this browser and call Claude straight from the page. Anyone who opened developer tools on a machine you were signed in on could read it and spend it, and it travelled to every device through your cloud sync.
+          <br/><br/>
+          The key now lives only on a small Worker of your own. This page never sees it. Because Nyla OS is a public page with no login of its own, <strong>your Google sign-in is what proves it is you</strong> — which is why AI needs you signed in now.
         </div>
-        <div style={{ display:'flex', gap:8 }}>
-          <input type={show?'text':'password'} value={apiKey} onChange={e=>{ setApiKey(e.target.value); setTest(null); }} onKeyDown={e=>e.key==='Enter'&&save()} placeholder="sk-ant-…"
-            style={{ flex:1, minWidth:0, padding:'10px 13px', borderRadius:12, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:13, fontFamily:'inherit' }}/>
-          <button onClick={()=>setShow(v=>!v)} style={{ padding:'0 12px', borderRadius:12, border:`0.5px solid ${C.border}`, background:C.card, color:C.textMuted, fontSize:12, cursor:'pointer' }}>{show?'Hide':'Show'}</button>
-          <button onClick={save} style={{ padding:'0 18px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13, cursor:'pointer' }}>Save</button>
-        </div>
-        <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap' }}>
-          <span style={{ fontSize:12.5, color: saved?'#3f9a6a':C.textMuted }}>{saved?'✓ Key saved on this device':'No key saved yet'}</span>
-          {apiKey.trim() && <button onClick={runTest} disabled={test==='testing'} style={{ padding:'5px 12px', borderRadius:20, border:`0.5px solid ${C.border}`, background:C.card, color:C.rose, fontSize:12, cursor:'pointer' }}>{test==='testing'?'Testing…':'Test key'}</button>}
+        <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+          <span style={{ fontSize:12.5, color: signedIn?'#3f9a6a':'#d05a5a' }}>
+            {signedIn ? '✓ Signed in — AI is available' : '⚠ Signed out — sign in (top right) to use AI'}
+          </span>
+          <button onClick={runTest} disabled={test==='testing'||!signedIn} style={{ padding:'5px 12px', borderRadius:20, border:`0.5px solid ${C.border}`, background:C.card, color: signedIn?C.rose:C.textMuted, fontSize:12, cursor: signedIn?'pointer':'default' }}>{test==='testing'?'Testing…':'Test connection'}</button>
         </div>
         {test && test!=='testing' && <div style={{ marginTop:10, fontSize:12.5, color: test.ok?'#3f9a6a':'#d05a5a' }}>{test.ok?'✓ ':'⚠ '}{test.msg}</div>}
+        <div style={{ marginTop:14, fontSize:11.5, color:C.textMuted, lineHeight:1.6 }}>
+          Model: {AI_MODEL}. To change the key, set it on the Worker: <code>npx wrangler secret put ANTHROPIC_API_KEY</code>
+        </div>
       </Card>
     </div>
   );
@@ -11420,7 +11438,6 @@ const ApiKeyPanel = () => {
 
 const SettingsPanel = ({ sub }) => {
   const [profile, setProfile] = useState(()=>JSON.parse(localStorage.getItem('nylaos_profile')||'{"name":"Nyla","bio":""}'));
-  const [apiKey, setApiKey] = useState(()=>localStorage.getItem('nylaos_api_key')||'');
   const saveProfile = p => { setProfile(p); localStorage.setItem('nylaos_profile',JSON.stringify(p)); };
 
   if (sub==='Profile') return (
@@ -11445,7 +11462,7 @@ const SettingsPanel = ({ sub }) => {
     </div>
   );
 
-  if (sub==='API Keys') return <ApiKeyPanel />;
+  if (sub==='AI Connection' || sub==='API Keys') return <ApiKeyPanel />;
 
   if (sub==='Chat History')     return <ChatHistoryPanel />;
   if (sub==='Appearance')       return <AppearancePanel />;

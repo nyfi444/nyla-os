@@ -19,3 +19,6 @@ Semester HQ - *.pdf
 
 # Personal utility, not part of the published app.
 move-vault-to-icloud.sh
+
+# The AI proxy Worker is its own thing; not part of the published Pages site.
+nyla-ai-proxy/
