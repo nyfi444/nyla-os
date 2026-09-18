@@ -780,6 +780,41 @@ const VAULT_OUT = '06 From Nyla OS';
           written.push(`${VAULT_OUT}/Goals Snapshot.md`);
         }
 
+        /* A machine-readable snapshot next to the notes. Nyla OS data lives in
+           localStorage, which nothing outside this browser can read — so a
+           Claude session on the Mac has no way to see any of it. This file is
+           that bridge. Dot-prefixed, so Obsidian ignores it.
+           Deliberately excludes the period and cycle logs: nothing about her
+           body goes into a file written for something else to read. */
+        const snapshot = {
+          app: 'nyla-os',
+          writtenAt: new Date().toISOString(),
+          note: 'Written by Nyla OS when the vault sync runs. As fresh as the last time she used the app.',
+          profile: JSON.parse(localStorage.getItem('nylaos_profile') || '{"name":"Nyla"}'),
+          goals: (JSON.parse(localStorage.getItem('nylaos_goals') || '[]')).map(g => ({
+            title: g.title, progress: g.progress || 0, periodType: g.periodType || '', venture: g.venture || '',
+            description: _htmlToText(g.description || '').slice(0, 600),
+            milestones: (g.milestones || []).map(m => ({ title: m.title, done: !!m.done })),
+          })),
+          tasks: (() => {
+            const all = JSON.parse(localStorage.getItem('nylaos_tasks') || '[]');
+            const cut = Date.now() - 45 * 864e5;
+            return {
+              open: all.filter(t => !t.done).map(t => ({ text: t.text, due: t.calendarDate || null, venture: t.venture || '', priority: t.priority || '', projectId: t.projectId || null })),
+              doneRecently: all.filter(t => t.done && t.doneAt && new Date(t.doneAt).getTime() > cut).map(t => ({ text: t.text, doneAt: t.doneAt })),
+            };
+          })(),
+          ideas: (JSON.parse(localStorage.getItem('nylaos_ideas') || '[]')).map(i => ({
+            title: i.title, category: i.category || '', venture: i.venture || '', body: vaultHtmlToMd(i.content || '').slice(0, 600),
+          })),
+          books: (JSON.parse(localStorage.getItem('nylaos_books') || '[]')).map(b => ({ title: b.title, author: b.author || '', status: b.status || '', rating: b.rating || null, finishedAt: b.finishedAt || null })),
+          social: (JSON.parse(localStorage.getItem('nylaos_social_accounts') || '[]')).map(a => ({ platform: a.platform || '', handle: a.handle || '', followers: a.followers || 0, goal: a.goal || null })),
+          notebook: pages.map(p => ({ folder: fname[p.folderId] || 'Unfiled', name: p.name || 'Untitled', updated: p.updated || null, chars: _htmlToText(p.content || '').length })),
+          vaultFolder: VAULT_OUT,
+        };
+        await Vault.write(`${VAULT_OUT}/.snapshot.json`, JSON.stringify(snapshot, null, 2));
+        written.push(`${VAULT_OUT}/.snapshot.json`);
+
         // An index note so the folder has a front door in the graph.
         const link=p=>`[[${p.split('/').pop().replace(/\.md$/,'')}]]`;
         let idx=`---\ntags: [nyla-os, meta]\nsource: nyla-os\nupdated: ${ymd()}\n---\n\n# From Nyla OS\n\nWritten by Nyla OS on ${new Date().toLocaleString()}. **Edits made here are overwritten on the next sync** — if a note matters, move it out of this folder.\n\n`;
