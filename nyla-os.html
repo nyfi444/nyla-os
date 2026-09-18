@@ -507,6 +507,19 @@ const VAULT_OUT = '06 From Nyla OS';
   const safeName = s => String(s||'').replace(/[\\/:#^\[\]|?*<>"]+/g,'-').replace(/\s+/g,' ').replace(/^[.\s]+|[.\s]+$/g,'').slice(0,80) || 'Untitled';
   const ymd = d => { const t=d?new Date(d):new Date(); return isNaN(t)?'':`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; };
 
+  /* Some notebook pages are a keyring — "API Keys", "Passwords". Writing those
+     into the vault puts live credentials in plaintext inside iCloud, where they
+     sync to every signed-in device and ride along in any backup or screenshot
+     of the vault. The page stays in Nyla OS; it just never crosses over.
+     Matched on the title, and on the shape of a real key in the body, because
+     a page called "Setup notes" can hold one just as easily. */
+  // "logins" is anchored: a page called "Logins" is a keyring, but "Login flow
+  // design" is a design note and was getting held back with it.
+  const SECRET_TITLE = /\b(api ?keys?|passwords?|passcodes?|credentials?|secrets?|seed phrase|recovery codes?)\b/i;
+  const SECRET_TITLE_EXACT = /^\s*(my )?logins?\s*$/i;
+  const SECRET_BODY  = /\b(sk-ant-[A-Za-z0-9_-]{8}|sk_live_[A-Za-z0-9]{8}|sk_test_[A-Za-z0-9]{8}|rk_live_[A-Za-z0-9]{8}|AIza[A-Za-z0-9_-]{20}|ghp_[A-Za-z0-9]{20}|xox[baprs]-[A-Za-z0-9-]{10}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/;
+  const holdsSecrets = (name, body) => SECRET_TITLE.test(String(name||'')) || SECRET_TITLE_EXACT.test(String(name||'')) || SECRET_BODY.test(String(body||''));
+
   /* Notebook pages are contenteditable HTML. Stripping to plain text (what the
      old single-file export did) threw away every heading, list and link, so
      this keeps the structure as real markdown instead. */
@@ -732,7 +745,10 @@ const VAULT_OUT = '06 From Nyla OS';
         folders.forEach(f=>{ fname[f.id]=safeName(f.name); });
         const used=new Set();
 
+        let heldBack=0;
         for(const p of pages){
+          const rawBody=_htmlToText(p.content||'');
+          if(holdsSecrets(p.name,rawBody)){ heldBack++; continue; }
           const folder=fname[p.folderId]||'Unfiled';
           let base=safeName(p.name||'Untitled');
           let rel=`${VAULT_OUT}/Notebook/${folder}/${base}.md`;
@@ -809,7 +825,7 @@ const VAULT_OUT = '06 From Nyla OS';
           })),
           books: (JSON.parse(localStorage.getItem('nylaos_books') || '[]')).map(b => ({ title: b.title, author: b.author || '', status: b.status || '', rating: b.rating || null, finishedAt: b.finishedAt || null })),
           social: (JSON.parse(localStorage.getItem('nylaos_social_accounts') || '[]')).map(a => ({ platform: a.platform || '', handle: a.handle || '', followers: a.followers || 0, goal: a.goal || null })),
-          notebook: pages.map(p => ({ folder: fname[p.folderId] || 'Unfiled', name: p.name || 'Untitled', updated: p.updated || null, chars: _htmlToText(p.content || '').length })),
+          notebook: pages.filter(p => !holdsSecrets(p.name, _htmlToText(p.content || ''))).map(p => ({ folder: fname[p.folderId] || 'Unfiled', name: p.name || 'Untitled', updated: p.updated || null, chars: _htmlToText(p.content || '').length })),
           vaultFolder: VAULT_OUT,
         };
         await Vault.write(`${VAULT_OUT}/.snapshot.json`, JSON.stringify(snapshot, null, 2));
@@ -825,6 +841,7 @@ const VAULT_OUT = '06 From Nyla OS';
           byFolder[f].forEach(w=>{ idx+=`- ${link(w)}\n`; });
           idx+='\n';
         });
+        if(heldBack) idx+=`> [!warning] ${heldBack} page${heldBack===1?'' : 's'} held back\n> ${heldBack===1?'A page that looks like it holds credentials was' : 'Pages that look like they hold credentials were'} not written here. ${heldBack===1?'It is' : 'They are'} still in Nyla OS — keys do not belong in a folder that syncs to iCloud.\n\n`;
         if(written.some(w=>w.endsWith('Idea Bank.md'))) idx+=`## Other\n\n- [[Idea Bank]]\n`;
         if(written.some(w=>w.endsWith('Goals Snapshot.md'))) idx+=`- [[Goals Snapshot]]\n`;
         await Vault.write(`${VAULT_OUT}/From Nyla OS.md`,idx);
