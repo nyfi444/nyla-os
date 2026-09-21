@@ -22,3 +22,7 @@ move-vault-to-icloud.sh
 
 # The AI proxy Worker is its own thing; not part of the published Pages site.
 nyla-ai-proxy/
+set-anthropic-key.sh
+
+# Product screenshots and recordings for the marketing site, captured locally.
+marketing-assets/
