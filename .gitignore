@@ -26,3 +26,7 @@ set-anthropic-key.sh
 
 # Product screenshots and recordings for the marketing site, captured locally.
 marketing-assets/
+
+# Third-party agent skills and their lockfile (not part of the site)
+.agents/
+skills-lock.json

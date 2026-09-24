@@ -161,6 +161,8 @@
 <script type="text/babel" src="js/brief.jsx"></script>
 <script type="text/babel" src="js/memories.jsx"></script>
 <script type="text/babel" src="js/agent-edit.jsx"></script>
+<script type="text/babel" src="js/agent-hub.jsx"></script>
+<script type="text/babel" src="js/agent-prompts.jsx"></script>
 <script type="text/babel" src="js/capture.jsx"></script>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
@@ -564,7 +566,8 @@ const VAULT_OUT = '06 From Nyla OS';
      old single-file export did) threw away every heading, list and link, so
      this keeps the structure as real markdown instead. */
   function vaultHtmlToMd(html){
-    const root=document.createElement('div');
+    // An inert document, so nothing in the note loads or runs while it is read.
+    const root=new DOMParser().parseFromString('<!DOCTYPE html><body></body>','text/html').body;
     root.innerHTML=String(html||'');
     root.querySelectorAll('script,style').forEach(n=>n.remove());
     const inline=node=>Array.from(node.childNodes).map(n=>{
@@ -947,7 +950,9 @@ const VAULT_OUT = '06 From Nyla OS';
 })();
 
 function _htmlToText(html){
-  const d=document.createElement('div');d.innerHTML=html;
+  // Parsed in an inert document: a div made with document.createElement still loads
+  // images and fires their onerror, and this runs over every note and idea (search).
+  const d=new DOMParser().parseFromString('<!DOCTYPE html><body></body>','text/html').body;d.innerHTML=String(html==null?'':html);
   return (d.innerText||d.textContent||'').trim();
 }
 
@@ -1379,8 +1384,6 @@ const NAV = [
   { id:'goals',      label:'Goals',      sub:['Overview','Yearly','Quarterly','Monthly','Dream Life','Recently Deleted'] },
   { id:'social',     label:'Social Media', sub:['Overview','Accounts','Content Calendar','Pipeline','Analytics','Ideas & Hashtags','Brand Deals','Recently Deleted'] },
   { id:'cosmic',     label:'Cosmic',     sub:['Overview','Astrology','Human Design','Numerology','Matrix of Destiny','Astrocartography'] },
-  { id:'university', label:'University', sub:['Dashboard','Upload Syllabus','Courses','Assignments','GPA Calculator','Resources','Recently Deleted'] },
-  { id:'books',      label:'Books',      sub:['Overview','My Library','Recently Deleted'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
   { id:'settings',   label:'Settings',   sub:['Profile','AI Connection','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
 ];
@@ -1524,9 +1527,12 @@ const downloadAsCsv = (title, rows) => {
   const csv = rows.map(r=>r.map(cell=>`"${String(cell??'').replace(/"/g,'""')}"`).join(',')).join('\r\n');
   downloadTextFile(`${sanitize(title)||'export'}.csv`, csv, 'text/csv');
 };
-const printAsPdf = (title, content, meta='') => {
+const printAsPdf = (rawTitle, content, rawMeta='') => {
+  // Written as HTML into a window of this origin below, so text must never become tags.
+  const escText = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const title = escText(rawTitle), meta = escText(rawMeta);
   const w = window.open('', '_blank');
-  w.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:24px;color:#c4607a;}</style></head><body><h1>${title}</h1>${meta?`<p style="font-size:11px;color:#aaa;">${meta}</p>`:''}<hr style="border:none;border-top:1px solid #eee;margin:16px 0;"><div style="white-space:pre-wrap;line-height:2;">${_htmlToText(content||'')||'(no content)'}</div></body></html>`);
+  w.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>@media print{body{margin:0;}@page{margin:1in;}}body{font-family:Georgia,serif;max-width:700px;margin:40px auto;line-height:2;color:#333;}h1{font-size:24px;color:#c4607a;}</style></head><body><h1>${title}</h1>${meta?`<p style="font-size:11px;color:#aaa;">${meta}</p>`:''}<hr style="border:none;border-top:1px solid #eee;margin:16px 0;"><div style="white-space:pre-wrap;line-height:2;">${escText(_htmlToText(content||''))||'(no content)'}</div></body></html>`);
   w.document.close(); w.print();
 };
 
@@ -1925,7 +1931,6 @@ const searchIndex = () => {
   L('nylaos_goals').forEach(g => out.push({ kind:'Goal', icon:'🎯', title:g.title, sub:`${g.progress||0}%${g.venture?` · ${g.venture}`:''}`, body:g.description, go:()=>window._navigateTo('goals', g.periodType==='quarterly'?'Quarterly':g.periodType==='monthly'?'Monthly':'Yearly') }));
   L('nylaos_ideas').forEach(i => out.push({ kind:'Idea', icon:'💡', title:i.title||i.text||'Idea', body:_htmlToText(i.content||i.description||''), go:()=>{ localStorage.setItem('nylaos_idea_open_request', String(i.id)); window._navigateTo('ideas'); } }));
   L('nylaos_nb_pages').forEach(pg => out.push({ kind:'Note', icon:'📝', title:pg.name||'Untitled page', body:_htmlToText(pg.content||''), go:()=>{ localStorage.setItem('nylaos_nb_open_request', String(pg.id)); window._navigateTo('notebook'); } }));
-  L('nylaos_books').forEach(b => out.push({ kind:'Book', icon:'📚', title:b.title, sub:b.author, go:()=>window._navigateTo('books','My Library') }));
   L('nylaos_social_content').forEach(c => out.push({ kind:'Post', icon:platformInfo(c.platform).emoji, title:c.title, sub:[c.status, c.date].filter(Boolean).join(' · '), body:[c.caption,c.hook,c.notes].filter(Boolean).join(' '), go:()=>window._navigateTo('social','Content Calendar') }));
   L('nylaos_shopping_list').forEach(i => out.push({ kind:'Shopping', icon:'🛒', title:i.text, go:()=>window._navigateTo('lists','Shopping List') }));
   return out;
@@ -2029,7 +2034,10 @@ const TopBar = ({ activeNav, activeSub }) => {
 };
 
 /* ── Sidebars ───────────────────────────────────────────────────── */
-const NAV_GROUPS = [['home','calendar','tasks','lists'], ['notebook','vault','ideas','goals'], ['period','books','university','cosmic'], ['social','agents']];
+// University was removed from the nav (Sept 2026, at Nyla's request). Its data keys
+// (nylaos_courses, nylaos_assignments…) are kept untouched, and the University
+// components are still in this file but nothing can open them.
+const NAV_GROUPS = [['home','calendar','tasks','lists'], ['notebook','vault','ideas','goals'], ['period','cosmic'], ['social','agents']];
 
 // Little counts beside sub-pages, so you can see what's waiting without clicking.
 const navBadge = (navId, sub) => {
@@ -2057,34 +2065,59 @@ const navBadge = (navId, sub) => {
 
 const LeftSidebar = ({ activeNav, onNavSelect, secCollapsed, onToggleSec }) => {
   const settings = NAV.find(n=>n.id==='settings');
+  // Names beside the icons, with a button at the bottom to fold back to icons
+  // only. On by default on a laptop-sized window; the choice is kept per device
+  // (nyla_ prefix, so it doesn't sync), since phones use the bottom tab bar.
+  const [labels, setLabels] = useState(()=>{
+    try { const v = localStorage.getItem('nyla_rail_labels'); return v ? v==='1' : window.innerWidth>=1100; } catch(e) { return true; }
+  });
+  const toggleLabels = () => setLabels(v=>{ const next = !v; try { localStorage.setItem('nyla_rail_labels', next?'1':'0'); } catch(e) {} return next; });
+  // Icon-only buttons keep their hover tooltip; labelled rows don't need one.
+  const tip = text => labels ? {} : { className:'rail-btn', 'data-tip':text };
   const NavBtn = ({ item }) => {
     const active = activeNav === item.id;
     return (
-      <button onClick={()=>onNavSelect(item.id)} aria-label={item.label} className="rail-btn" data-tip={item.label}
-        style={{ width:46, height:46, borderRadius:15, flexShrink:0, position:'relative', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', transition:'all .18s',
+      <button onClick={()=>onNavSelect(item.id)} aria-label={item.label} {...tip(item.label)}
+        style={{ width: labels?'100%':46, height: labels?36:46, borderRadius: labels?11:15, flexShrink:0, position:'relative', display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:11, padding: labels?'0 12px':0, cursor:'pointer', transition:'all .18s', fontFamily:'inherit',
           background: active ? (_dk ? `linear-gradient(145deg, ${C.rose}40, ${C.accent}30)` : `linear-gradient(145deg, ${C.pink}, ${C.lavLight})`) : 'transparent', border:`0.5px solid ${active?C.border:'transparent'}`,
-          boxShadow: active ? `0 6px 16px ${C.rose}2e` : 'none' }}>
+          boxShadow: active ? `0 6px 16px ${C.rose}2e` : 'none' }}
+        onMouseEnter={e=>{ if(labels && !active) e.currentTarget.style.background=`${C.pink}45`; }} onMouseLeave={e=>{ if(labels && !active) e.currentTarget.style.background='transparent'; }}>
         <Ico d={icons[item.id]} size={20} active={active} />
+        {labels && <span style={{ fontSize:13.5, fontWeight: active?600:400, color: active?C.rose:C.textLight, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.label}</span>}
         {active && <span style={{ position:'absolute', left:-10, top:'50%', transform:'translateY(-50%)', width:4, height:22, borderRadius:4, background:`linear-gradient(${C.rose}, ${C.accent})` }}/>}
       </button>
     );
   };
+  // The logo stays pinned at the top and Settings + the label toggle at the
+  // bottom; only the section list between them scrolls on a short window.
+  const col = { display:'flex', flexDirection:'column', alignItems: labels?'stretch':'center', gap:3 };
   return (
-    <div className="no-scrollbar" style={{ width:72, background:C.sidebarBg, borderRight:`0.5px solid ${C.border}`, display:'flex', flexDirection:'column', alignItems:'center', padding:'14px 0 12px', gap:3, flexShrink:0, overflowY:'auto', overflowX:'visible' }}>
-      <button onClick={()=>onNavSelect('home')} aria-label="Home" style={{ width:40, height:40, borderRadius:13, border:'none', cursor:'pointer', position:'relative', marginBottom:6, flexShrink:0,
-        background:`linear-gradient(135deg, ${C.rose}, ${C.accent})`, color:'#fff', fontFamily:"'DM Serif Display',serif", fontSize:18, boxShadow:`0 6px 18px ${C.rose}55` }}>
-        N<span style={{ position:'absolute', top:4, right:6, fontSize:8 }}>✦</span>
-      </button>
-      <button onClick={onToggleSec} title={secCollapsed?'Show menu':'Hide menu'} className="rail-btn" data-tip={secCollapsed?'Show menu':'Hide menu'}
-        style={{ width:30, height:20, borderRadius:8, background:'transparent', border:`0.5px solid ${C.border}`, cursor:'pointer', fontSize:12, color:C.textMuted, marginBottom:8, flexShrink:0 }}>{secCollapsed?'›':'‹'}</button>
-      {NAV_GROUPS.map((g,gi)=>(
-        <React.Fragment key={gi}>
-          {gi>0 && <div style={{ width:26, height:1, background:C.border, margin:'6px 0', flexShrink:0 }}/>}
-          {g.map(id=>{ const item = NAV.find(n=>n.id===id); return item ? <NavBtn key={id} item={item}/> : null; })}
-        </React.Fragment>
-      ))}
-      <div style={{ flex:1, minHeight:10 }}/>
+    <div style={{ ...col, width: labels?200:72, transition:'width .2s ease', background:C.sidebarBg, borderRight:`0.5px solid ${C.border}`, padding: labels?'14px 12px 12px':'14px 0 12px', flexShrink:0, overflow:'hidden' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:10, marginBottom:6, paddingLeft: labels?3:0, flexShrink:0 }}>
+        <button onClick={()=>onNavSelect('home')} aria-label="Home" style={{ width:40, height:40, borderRadius:13, border:'none', cursor:'pointer', position:'relative', flexShrink:0,
+          background:`linear-gradient(135deg, ${C.rose}, ${C.accent})`, color:'#fff', fontFamily:"'DM Serif Display',serif", fontSize:18, boxShadow:`0 6px 18px ${C.rose}55` }}>
+          N<span style={{ position:'absolute', top:4, right:6, fontSize:8 }}>✦</span>
+        </button>
+        {labels && <span style={{ fontFamily:"'DM Serif Display',serif", fontSize:19, color:C.rose, whiteSpace:'nowrap', flex:1 }}>Nyla OS</span>}
+        {labels && <button onClick={onToggleSec} title={secCollapsed?'Show menu':'Hide menu'} aria-label={secCollapsed?'Show menu':'Hide menu'}
+          style={{ width:26, height:22, borderRadius:8, background:'transparent', border:`0.5px solid ${C.border}`, cursor:'pointer', fontSize:12, color:C.textMuted, flexShrink:0, fontFamily:'inherit' }}>{secCollapsed?'›':'‹'}</button>}
+      </div>
+      {!labels && <button onClick={onToggleSec} title={secCollapsed?'Show menu':'Hide menu'} {...tip(secCollapsed?'Show menu':'Hide menu')}
+        style={{ width:30, height:20, borderRadius:8, background:'transparent', border:`0.5px solid ${C.border}`, cursor:'pointer', fontSize:12, color:C.textMuted, marginBottom:8, flexShrink:0 }}>{secCollapsed?'›':'‹'}</button>}
+      {/* Negative margin + matching padding so the active marker (left:-10) isn't clipped by the scroll box. */}
+      <div className="no-scrollbar" style={{ ...col, flex:1, minHeight:0, overflowY:'auto', overflowX:'hidden', margin: labels?'0 -12px':0, padding: labels?'0 12px 8px':'0 0 8px', alignSelf:'stretch' }}>
+        {NAV_GROUPS.map((g,gi)=>(
+          <React.Fragment key={gi}>
+            {gi>0 && <div style={{ width: labels?'100%':26, height:1, background:C.border, margin: labels?'4px 0':'6px 0', flexShrink:0 }}/>}
+            {g.map(id=>{ const item = NAV.find(n=>n.id===id); return item ? <NavBtn key={id} item={item}/> : null; })}
+          </React.Fragment>
+        ))}
+      </div>
       {settings && <NavBtn item={settings}/>}
+      <button onClick={toggleLabels} aria-label={labels?'Hide labels':'Show labels'} title={labels?'Hide labels':'Show labels'} {...tip('Show labels')}
+        style={{ marginTop:6, flexShrink:0, height:34, width: labels?'100%':46, borderRadius:11, border:`0.5px solid ${C.border}`, background:'transparent', color:C.textMuted, cursor:'pointer', fontSize:12, display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:8, padding: labels?'0 12px':0, fontFamily:'inherit', whiteSpace:'nowrap' }}>
+        <span style={{ fontSize:15, lineHeight:1 }}>{labels?'«':'»'}</span>{labels && 'Hide labels'}
+      </button>
     </div>
   );
 };
@@ -2262,6 +2295,9 @@ const HomeOverview = () => {
   const go = (nav, sub) => window._navigateTo && window._navigateTo(nav, sub);
 
   const saveTasks = t => { setTasks(t); localStorage.setItem('nylaos_tasks', JSON.stringify(t)); };
+  // The Morning Brief (js/brief.jsx) checks tasks off and adds them too. Re-read the list
+  // when it does, so this card never saves its older copy over those changes.
+  useEffect(()=>{ const f=()=>setTasks(JSON.parse(localStorage.getItem('nylaos_tasks')||'[]')); window.addEventListener('nyla-tasks-changed', f); return ()=>window.removeEventListener('nyla-tasks-changed', f); },[]);
   const mine = tasks.filter(t=>t.source!=='calendar');
   const dueNow = mine.filter(t=>!t.done && t.calendarDate && t.calendarDate<=today).sort((a,b)=>a.calendarDate.localeCompare(b.calendarDate));
   const doneToday = mine.filter(t=>t.done && t.completedDate===today);
@@ -2284,10 +2320,15 @@ const HomeOverview = () => {
   };
   const habitsDone = habits.filter(h=>habitLog[`${h.id}_${today}`]).length;
 
+  // Times are stored as 'H:MM' or 'HH:MM' (24h). '9:05' isn't a valid ISO time, so building a Date
+  // from it gave "Invalid Date"; read the hours and minutes directly instead.
+  const schedHM = t => { const m = String(t||'').match(/^(\d{1,2}):(\d{2})/); return m && +m[1] < 24 && +m[2] < 60 ? [+m[1], +m[2]] : null; };
+  const schedKey = t => { const hm = schedHM(t); return hm ? `${String(hm[0]).padStart(2,'0')}:${String(hm[1]).padStart(2,'0')}` : '99'; };
+  const schedTime = t => { const hm = schedHM(t); return hm ? `${hm[0]%12||12}:${String(hm[1]).padStart(2,'0')} ${hm[0]>=12?'PM':'AM'}` : String(t); };
   const events = [
     ...JSON.parse(localStorage.getItem('nylaos_events')||'[]').filter(e=>e.date===today).map(e=>({ id:'e'+e.id, text:e.text, time:e.time })),
     ...tasks.filter(t=>t.source==='calendar' && t.calendarDate===today).map(t=>({ id:'c'+t.id, text:t.text, time:t.time, done:t.done })),
-  ].sort((a,b)=>(a.time||'99').localeCompare(b.time||'99'));
+  ].sort((a,b)=>schedKey(a.time).localeCompare(schedKey(b.time)));
   const goals = JSON.parse(localStorage.getItem('nylaos_goals')||'[]').filter(g=>(g.progress||0)<100)
     .sort((a,b)=>(a.targetDate||'9999').localeCompare(b.targetDate||'9999')).slice(0,4);
 
@@ -2333,7 +2374,7 @@ const HomeOverview = () => {
 
       <div style={{ display:'grid', gridTemplateColumns: isMobile?'1fr':'1.35fr 1fr', gap:16 }}>
         {/* Today's tasks */}
-        <Card style={{ gridRow: isMobile?'auto':'span 2' }}>
+        <Card>
           <HomeLabel action={<LinkBtn onClick={()=>go('tasks','Today')}>Open Tasks →</LinkBtn>}>Today</HomeLabel>
           <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:14 }}>
             <div style={{ width:54, height:54, borderRadius:'50%', background:`conic-gradient(${C.rose} ${taskPct*3.6}deg, ${C.pink}70 0)`, display:'grid', placeItems:'center', flexShrink:0 }}>
@@ -2375,18 +2416,6 @@ const HomeOverview = () => {
           </div>
         </Card>
 
-        {/* Schedule */}
-        <Card>
-          <HomeLabel action={<LinkBtn onClick={()=>go('calendar','Daily')}>Calendar →</LinkBtn>}>Schedule</HomeLabel>
-          {events.length===0
-            ? <div style={{ fontSize:13, color:C.textMuted, fontStyle:'italic' }}>Nothing on the calendar today.</div>
-            : events.slice(0,5).map(e=>(
-                <div key={e.id} style={{ display:'flex', gap:12, alignItems:'baseline', padding:'6px 0' }}>
-                  <span style={{ fontSize:11.5, color:C.accent, minWidth:52, fontVariantNumeric:'tabular-nums' }}>{e.time ? new Date(`2000-01-01T${e.time}`).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : 'All day'}</span>
-                  <span style={{ fontSize:13, color:e.done?C.textMuted:C.text, textDecoration:e.done?'line-through':'none' }}>{e.text}</span>
-                </div>
-              ))}
-        </Card>
 
         {/* Habits */}
         <Card>
@@ -2947,8 +2976,11 @@ const TRASH_KEY = 'nylaos_trash';
 const getTrash = () => JSON.parse(localStorage.getItem(TRASH_KEY)||'[]');
 const saveTrash = items => localStorage.setItem(TRASH_KEY, JSON.stringify(items));
 const addToTrash = (type, name, data, storageKey) => {
-  const item = { id:Date.now(), type, name, data, storageKey, deletedAt:new Date().toISOString() };
-  saveTrash([item, ...getTrash()]);
+  const trash = getTrash();
+  let id = Date.now();
+  while (trash.some(t=>t.id===id)) id++;
+  const item = { id, type, name, data, storageKey, deletedAt:new Date().toISOString() };
+  saveTrash([item, ...trash]);
 };
 const restoreTrashItem = id => {
   const trash = getTrash();
@@ -3685,7 +3717,7 @@ const VoiceNotes = () => {
     if(!transcript.trim()){ toast('Nothing to save','error'); return; }
     const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
     const name='Voice Note · '+new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
-    pages.push({id:Date.now(),name,folderId:1,content:`<p>${transcript.trim().replace(/\n/g,'</p><p>')}</p>`,created:new Date().toISOString(),updated:new Date().toISOString()});
+    pages.push({id:Date.now(),name,folderId:1,content:`<p>${agentEditEscHtml(transcript.trim()).replace(/\n/g,'</p><p>')}</p>`,created:new Date().toISOString(),updated:new Date().toISOString()});
     localStorage.setItem('nylaos_nb_pages',JSON.stringify(pages));
     toast('Saved to Notebook','success');
     setTranscript('');
@@ -3814,7 +3846,7 @@ Today's date is ${toDateKey()}. Resolve relative dates ("next Tuesday", "tomorro
     const pages = JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
     (result.notes||[]).forEach((n,i)=>{ if(checked[`notes_${i}`]){
       const name = n.title || ('Brain Dump · '+new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'}));
-      pages.push({id:Date.now()+Math.random(),name,folderId:1,content:`<p>${(n.content||'').replace(/\n/g,'</p><p>')}</p>`,created:new Date().toISOString(),updated:new Date().toISOString()});
+      pages.push({id:Date.now()+Math.random(),name,folderId:1,content:agentTextToHtml(n.content||''),created:new Date().toISOString(),updated:new Date().toISOString()}); // model text, escaped (the editor sets innerHTML)
       added++; summaryLines.push(`<li>📝 ${name}</li>`);
     }});
     localStorage.setItem('nylaos_nb_pages', JSON.stringify(pages));
@@ -4173,6 +4205,7 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
             ); })}
           </div>
           <WhenPicker compact value={t.calendarDate||null} onChange={v=>onUpdate({ calendarDate:v })}/>
+          {!t.done && <div><EnergyChip t={t} onUpdate={onUpdate} always /></div>}
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
             <select value={t.repeat||''} onChange={e=>onUpdate({ repeat:e.target.value||null })} style={{ padding:'6px 10px', borderRadius:10, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:12, fontFamily:'inherit' }}>
               {REPEAT_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}
@@ -4265,7 +4298,7 @@ const TasksPanel = ({ sub }) => {
     const total = todays.length + overdue.length + doneToday.length;
     const pct = total ? Math.round(doneToday.length/total*100) : 0;
     body = (<>
-      <PhaseSortBanner onChange={()=>setTasks(t=>[...t])} />
+      <PhaseSortBanner onChange={()=>setTasks(JSON.parse(localStorage.getItem(storageKey)||'[]'))} />
       {total>0 && (
         <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:20, padding:'14px 18px', borderRadius:16, background:C.gradA }}>
           <div style={{ width:46, height:46, borderRadius:'50%', background:`conic-gradient(${C.rose} ${pct*3.6}deg, ${C.card} 0)`, display:'grid', placeItems:'center', flexShrink:0 }}>
@@ -4661,7 +4694,7 @@ const loadPdfsInElement = async (el) => {
   const refs = el.querySelectorAll('[data-pdf-key]');
   for (const ref of refs) {
     const key = ref.getAttribute('data-pdf-key');
-    const name = ref.getAttribute('data-pdf-name') || 'PDF';
+    const name = String(ref.getAttribute('data-pdf-name') || 'PDF').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); // a file name, written into innerHTML below
     try {
       const blob = await pdfDb.load(key);
       if (blob) {
@@ -4672,6 +4705,32 @@ const loadPdfsInElement = async (el) => {
       }
     } catch(e) { console.error('PDF load error', e); }
   }
+};
+
+/* ── Pasted / imported text for the Notebook ─────────────────────
+   The editor stores innerHTML, so anything pasted or imported is made safe
+   first: plain text is escaped, and pasted HTML is parsed in an inert
+   document and stripped of scripts, embeds, event handlers and non-web links. */
+const nbEscText = s => String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const nbCleanPasteHtml = (html) => {
+  try {
+    const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+    doc.querySelectorAll('script,iframe,frame,frameset,object,embed,applet,style,link,meta,base,form,input,button,textarea,select,option,svg,math,template,noscript,audio,video,source,track,portal,xmp,plaintext,noembed,noframes').forEach(el => el.remove());
+    const okHref = v => /^(https?:|mailto:|#)/i.test(v.trim());
+    const okSrc = v => /^(https?:|data:image\/(png|jpe?g|gif|webp);)/i.test(v.trim());
+    doc.body.querySelectorAll('*').forEach(el => {
+      [...el.attributes].forEach(a => {
+        const n = a.name.toLowerCase();
+        if (n.startsWith('on') || ['id','name','srcset','action','formaction','xlink:href','background','poster','data','contenteditable','is'].includes(n)) el.removeAttribute(a.name);
+        else if (n === 'href' && !okHref(a.value)) el.removeAttribute(a.name);
+        else if (n === 'src' && !okSrc(a.value)) el.removeAttribute(a.name);
+        else if (n === 'style' && /url\s*\(|expression\s*\(|javascript:/i.test(a.value)) el.removeAttribute(a.name);
+      });
+      if (el.tagName === 'A' && el.hasAttribute('href')) { el.setAttribute('rel','noopener noreferrer'); el.setAttribute('target','_blank'); }
+    });
+    return doc.body.innerHTML;
+  } catch (e) { return ''; } // never fall back to the raw HTML
 };
 
 /* ── Rich Text Editor (module-level to avoid remount) ───────────── */
@@ -4710,10 +4769,10 @@ const RichEditorComponent = ({ pageId, initialContent, onUpdate, onMount }) => {
     if (!pastePrompt) return;
     ref.current.focus();
     if (useFormatting) {
-      document.execCommand('insertHTML', false, pastePrompt.html);
+      document.execCommand('insertHTML', false, nbCleanPasteHtml(pastePrompt.html));
     } else {
-      // Strip HTML — paste clean plain text
-      const text = pastePrompt.plain.replace(/\n{2,}/g,'\n').replace(/\n/g,'<br>');
+      // Strip HTML — paste clean plain text (escaped, so text that looks like a tag stays text)
+      const text = nbEscText(pastePrompt.plain).replace(/\r\n?/g,'\n').replace(/\n{2,}/g,'\n').replace(/\n/g,'<br>');
       document.execCommand('insertHTML', false, text);
     }
     if (ref.current) onUpdate(ref.current.innerHTML);
@@ -4978,10 +5037,12 @@ const IDEA_TEMPLATES = [
   { name:'Video Concept', content:'Title/Hook:\n\nFormat:\n\nKey points:\n- \n- \n- \n\nThumbnail idea:\n\nPlatform:' },
 ];
 const IdeaFullscreenModal = ({ idea, categories, onClose, onUpdate, onDelete, onArchive, onSaveToNotebook }) => {
+  // A phone capture stores escaped HTML (js/capture.jsx): edit it as plain text, store it escaped again.
+  const shownContent = idea.captureId ? capture_ideaPlain(idea.content||'') : (idea.content||'');
   const [title, setTitle] = useState(idea.title);
-  const [content, setContent] = useState(idea.content||'');
-  useEffect(()=>{ setTitle(idea.title); setContent(idea.content||''); }, [idea.id]);
-  const commit = () => { if(title!==idea.title || content!==(idea.content||'')) onUpdate(idea.id, {title, content}); };
+  const [content, setContent] = useState(shownContent);
+  useEffect(()=>{ setTitle(idea.title); setContent(shownContent); }, [idea.id]);
+  const commit = () => { if(title!==idea.title || content!==shownContent) onUpdate(idea.id, {title, content: idea.captureId ? capture_toHtml(content) : content}); };
   const catInfo = categories.find(c=>c.key===idea.category);
   const dotColor = idea.color || catInfo?.color || C.rose;
 
@@ -4990,7 +5051,7 @@ const IdeaFullscreenModal = ({ idea, categories, onClose, onUpdate, onDelete, on
       <div style={{ padding:'12px 24px', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:12, background:C.sidebarBg, flexShrink:0 }}>
         <span style={{ width:10, height:10, borderRadius:'50%', background:dotColor, flexShrink:0 }}/>
         <div style={{ flex:1, fontSize:12, color:C.textMuted }}>{catInfo?.label || idea.category}</div>
-        <ExportMenu title={title} content={content} meta={new Date(idea.created).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} onSaveToNotebook={()=>onSaveToNotebook(idea)} />
+        <ExportMenu title={title} content={idea.captureId ? capture_toHtml(content) : content} meta={new Date(idea.created).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} onSaveToNotebook={()=>onSaveToNotebook(idea)} />
         <button onClick={()=>onArchive(idea)} title={idea.status==='archived'?'Unarchive':'Archive'}
           style={{ padding:'6px 12px', borderRadius:8, background:idea.status==='archived'?`${C.accent}25`:'transparent', border:`0.5px solid ${idea.status==='archived'?C.accent:C.border}`, color:idea.status==='archived'?C.accent:C.textMuted, fontSize:11.5, cursor:'pointer' }}>🗄 {idea.status==='archived'?'Unarchive':'Archive'}</button>
         <button onClick={()=>{ if(window.confirm(`Delete "${idea.title}"? It'll move to Recently Deleted.`)){ onDelete(idea.id); onClose(); } }}
@@ -5029,7 +5090,7 @@ const IdeaBank = () => {
   const [fullscreenId, setFullscreenId] = useState(null);
   useEffect(() => {
     const req = localStorage.getItem('nylaos_idea_open_request');
-    if (req) { localStorage.removeItem('nylaos_idea_open_request'); setFullscreenId(parseInt(req)); }
+    if (req) { localStorage.removeItem('nylaos_idea_open_request'); const hit = ideas.find(i => String(i.id) === req); if (hit) setFullscreenId(hit.id); }
   }, []);
   const [editId, setEditId] = useState(null);
   const [editContent, setEditContent] = useState('');
@@ -5066,7 +5127,9 @@ const IdeaBank = () => {
     const pageId = Date.now();
     const page = {
       id: pageId, name: idea.title, folderId: folderId || 3 /* default "Ideas" folder */,
-      content: (idea.content||'').split('\n').filter(Boolean).map(p=>`<p>${p}</p>`).join('') || '<p><br></p>',
+      // A captured idea's content is already escaped HTML (js/capture.jsx); any other idea is
+      // plain text (typed, or written by an agent), so it is escaped before the editor gets it.
+      content: (idea.content||'').split('\n').filter(Boolean).map(p=>`<p>${idea.captureId ? p : agentEditEscHtml(p)}</p>`).join('') || '<p><br></p>',
       created: new Date().toISOString(), updated: new Date().toISOString(),
       sourceIdeaId: idea.id,
     };
@@ -5126,11 +5189,11 @@ const IdeaBank = () => {
   const updateIdea = (id, field, val) => { save(ideas.map(i=>i.id===id?{...i,[field]:val,updated:new Date().toISOString()}:i)); };
   const IDEA_TRACKED_FIELDS = ['title','content'];
   const [editTitle, setEditTitle] = useState('');
-  const startEdit = (idea) => { setEditId(idea.id); setEditTitle(idea.title||''); setEditContent(idea.content||''); };
+  const startEdit = (idea) => { setEditId(idea.id); setEditTitle(idea.title||''); setEditContent(idea.captureId ? capture_ideaPlain(idea.content||'') : (idea.content||'')); };
   const saveEdit = () => {
     if (editId) {
       save(ideas.map(i => i.id===editId
-        ? {...i, title:editTitle.trim()||i.title, content:editContent, updated:new Date().toISOString(), versionHistory:withVersionSnapshot(i, IDEA_TRACKED_FIELDS)}
+        ? {...i, title:editTitle.trim()||i.title, content:i.captureId ? capture_toHtml(editContent) : editContent, updated:new Date().toISOString(), versionHistory:withVersionSnapshot(i, IDEA_TRACKED_FIELDS)}
         : i));
     }
     setEditId(null);
@@ -5147,7 +5210,7 @@ const IdeaBank = () => {
     const PJK = 'nylaos_projects';
     const projects = JSON.parse(localStorage.getItem(PJK)||'[]');
     const projectId = Date.now();
-    const project = {id:projectId, title:idea.title, description:idea.content||'', status:'active', sourceIdeaId:idea.id, created:new Date().toISOString()};
+    const project = {id:projectId, title:idea.title, description:idea.captureId ? capture_ideaPlain(idea.content||'') : (idea.content||''), status:'active', sourceIdeaId:idea.id, created:new Date().toISOString()};
     localStorage.setItem(PJK, JSON.stringify([project, ...projects]));
     const verify = JSON.parse(localStorage.getItem(PJK)||'[]');
     if (!verify.some(p=>p.id===projectId)) { toast('Convert to Project failed — try again','error'); return; }
@@ -5158,7 +5221,7 @@ const IdeaBank = () => {
     const chatEntry = {ts:new Date().toISOString(), summary:`Shared "${idea.title}" with an agent`};
     const chats = idea.relatedAgentChats || [];
     updateIdea(idea.id, 'relatedAgentChats', [chatEntry, ...chats]);
-    localStorage.setItem('nylaos_agent_pending_context', JSON.stringify({source:'idea', title:idea.title, content:idea.content||''}));
+    localStorage.setItem('nylaos_agent_pending_context', JSON.stringify({source:'idea', title:idea.title, content:idea.captureId ? capture_ideaPlain(idea.content||'') : (idea.content||'')}));
     if (window._navigateTo) window._navigateTo('agents', 'My Agents');
     toast('Sent to Agents — pick an agent to continue','info',2200);
   };
@@ -5175,7 +5238,7 @@ const IdeaBank = () => {
     const TK = 'nylaos_tasks';
     const tasks = JSON.parse(localStorage.getItem(TK)||'[]');
     const taskId = Date.now();
-    const task = {id:taskId, text:idea.title, done:false, tag:null, notes:idea.content||'', relatedIdeaId:idea.id, created:new Date().toISOString()};
+    const task = {id:taskId, text:idea.title, done:false, tag:null, notes:idea.captureId ? capture_ideaPlain(idea.content||'') : (idea.content||''), relatedIdeaId:idea.id, created:new Date().toISOString()};
     localStorage.setItem(TK, JSON.stringify([...tasks, task]));
     const verify = JSON.parse(localStorage.getItem(TK)||'[]');
     if (!verify.some(t=>t.id===taskId)) { toast('Convert to Task failed — try again','error'); return; }
@@ -5385,7 +5448,7 @@ const IdeaBank = () => {
               {idea.content&&(
                 <div style={{fontSize:12,color:C.textLight,lineHeight:1.6,whiteSpace:'pre-wrap',
                   overflow:isExp?'visible':'hidden',maxHeight:isExp?'none':60,
-                }}>{idea.content}</div>
+                }}>{idea.captureId ? <CaptureIdeaText html={idea.content}/> : idea.content}</div>
               )}
               {isExp&&(
                 <div style={{marginTop:10,display:'flex',gap:6,borderTop:`0.5px solid ${C.border}`,paddingTop:8}} onClick={e=>e.stopPropagation()}>
@@ -5797,17 +5860,17 @@ const NotebookPanel = ({ sub }) => {
         try {
           const pdfKey = `pdf_${Date.now()}_${i}`;
           await pdfDb.save(pdfKey, file);
-          content = `<div contenteditable="false" data-pdf-key="${pdfKey}" data-pdf-name="${file.name}" style="margin:12px 0;user-select:none;border-radius:10px;overflow:hidden;border:0.5px solid #f0d0dc"><div style="padding:8px 14px;background:#faf5f8;font-size:12px;color:#9c7090">📄 ${file.name} — loading...</div></div><p><br></p>`;
+          content = `<div contenteditable="false" data-pdf-key="${pdfKey}" data-pdf-name="${nbEscText(file.name)}" style="margin:12px 0;user-select:none;border-radius:10px;overflow:hidden;border:0.5px solid #f0d0dc"><div style="padding:8px 14px;background:#faf5f8;font-size:12px;color:#9c7090">📄 ${nbEscText(file.name)} — loading...</div></div><p><br></p>`;
         } catch(e) {
-          content = `<p><em>📄 Could not save PDF: <strong>${file.name}</strong></em></p><p><br></p>`;
+          content = `<p><em>📄 Could not save PDF: <strong>${nbEscText(file.name)}</strong></em></p><p><br></p>`;
         }
       } else {
         try {
           const text = await file.text();
           content = file.name.endsWith('.md')
             ? mdToHtml(text)
-            : text.split('\n\n').map(p=>p.trim()).filter(Boolean).map(p=>`<p>${p.replace(/\n/g,'<br>')}</p>`).join('') || '<p><br></p>';
-        } catch(e) { content = `<p><em>Imported: ${file.name}</em></p><p><br></p>`; }
+            : text.replace(/\r\n?/g,'\n').split('\n\n').map(p=>p.trim()).filter(Boolean).map(p=>`<p>${nbEscText(p).replace(/\n/g,'<br>')}</p>`).join('') || '<p><br></p>';
+        } catch(e) { content = `<p><em>Imported: ${nbEscText(file.name)}</em></p><p><br></p>`; }
       }
       newPages.push({id:base+i,name,folderId:activeFid,content,created:new Date().toISOString(),updated:new Date().toISOString()});
     }
@@ -6129,15 +6192,15 @@ const NotebookPanel = ({ sub }) => {
     return `
       ${stripeOnly}
       <div class="nyla-cover">
-        <p class="nyla-label">${folder?.name||'Notebook'}</p>
-        <h1 class="nyla-title">${page.name}</h1>
+        <p class="nyla-label">${agentEditEscHtml(folder?.name||'Notebook')}</p>
+        <h1 class="nyla-title">${agentEditEscHtml(page.name)}</h1>
         <p class="nyla-meta">
           ${dateStr}<span class="nyla-meta-sep">·</span>${wc} words
         </p>
       </div>
       <div class="nyla-body">${page.content||'<p style="color:#c0a0b0;font-style:italic;font-family:\'Cormorant Garamond\',serif;">No content yet.</p>'}</div>
       <div class="nyla-footer">
-        <span>${folder?.name||'Notebook'} &nbsp;·&nbsp; ${page.name}</span>
+        <span>${agentEditEscHtml(folder?.name||'Notebook')} &nbsp;·&nbsp; ${agentEditEscHtml(page.name)}</span>
         <span>nyla os</span>
       </div>
       ${pageBreak}
@@ -6148,7 +6211,7 @@ const NotebookPanel = ({ sub }) => {
     if(!activePage) return;
     const folder = folders.find(f=>f.id===activePage.folderId);
     const w = window.open('','_blank');
-    w.document.write(`<!DOCTYPE html><html><head><title>${activePage.name}</title><style>${pdfStyles}</style></head><body>${buildPageHtml(activePage,folder,0,1)}</body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><title>${agentEditEscHtml(activePage.name)}</title><style>${pdfStyles}</style></head><body>${buildPageHtml(activePage,folder,0,1)}</body></html>`);
     w.document.close();
     w.onload = () => { w.focus(); w.print(); };
   };
@@ -6158,7 +6221,7 @@ const NotebookPanel = ({ sub }) => {
     const folder = folders.find(f=>f.id===activePage.folderId);
     const notebookPages = pages.filter(p=>p.folderId===activePage.folderId);
     if(!notebookPages.length) return;
-    const notebookTitle = folder?.name || 'Notebook';
+    const notebookTitle = agentEditEscHtml(folder?.name || 'Notebook'); // names can come from agents; this is written as HTML into a same-origin window
     const today = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
     const coverHtml = `
       <div class="nyla-stripe"></div>
@@ -10318,10 +10381,33 @@ const BooksPanel = ({ sub }) => {
 
 /* ── AI Agents ──────────────────────────────────────────────────── */
 // Every default agent carries the same permission shape used by the executor:
-// canDelete is always false (hard ceiling, not just a default — no action spec can delete anyway),
-// folderAccess:[] means "no notebook folder restriction", autoApprove only ever applies to
-// single-item batches regardless of what's set here (multi-item/calendar/notebook always require approval).
-const AGENT_PERM_DEFAULTS = { permissions:{canCreate:true,canEdit:true,canDelete:false}, folderAccess:[], autoApprove:false, businessAssignment:null };
+// canDelete is on (Nyla's call, Sept 24 2026): an agent may propose dropTasks, which moves
+// tasks to Recently Deleted, never a hard delete. Every step still waits for her Approve, Undo
+// puts them back, and the Can delete box in an agent's Settings turns it off for that agent.
+/* Sept 24 2026: Academic Assistant and Study Buddy went with the University section (matched by
+   name, since saved lists from before Jul 30 used other ids); every saved agent may now move tasks
+   to Recently Deleted (still approval-only); the reading coach has its new name. Runs once. */
+const migrateAgentsSep24 = () => {
+  try {
+    if (localStorage.getItem('nylaos_mig_agents_v2')) return;
+    const saved = JSON.parse(localStorage.getItem('nylaos_agents') || 'null');
+    if (Array.isArray(saved)) {
+      const retired = new Set(['Academic Assistant', 'Study Buddy']);
+      const next = saved.filter(a => !(a && retired.has(a.name) && a.id < 1e6)).map(a => {
+        const b = { ...a, permissions:{ ...(AGENT_PERM_DEFAULTS.permissions), ...(a.permissions||{}), canDelete:true } };
+        // A built-in agent whose prompt she rewrote keeps her words: the new role prompts
+        // (js/agent-prompts.jsx) only replace prompts that still match the shipped default.
+        const d = typeof agentHub_defaultFor === 'function' ? agentHub_defaultFor(a) : null;
+        if (d && !b.promptOverride && String(b.systemPrompt||'').trim() && String(b.systemPrompt).trim() !== String(d.systemPrompt||'').trim()) b.promptOverride = b.systemPrompt;
+        if (b.name === 'Book and Learning Coach') b.name = 'Reading & Learning Coach';
+        return b;
+      });
+      localStorage.setItem('nylaos_agents', JSON.stringify(next));
+    }
+    localStorage.setItem('nylaos_mig_agents_v2', '1');
+  } catch (e) { console.warn('Agent migration', e); }
+};
+const AGENT_PERM_DEFAULTS = { permissions:{canCreate:true,canEdit:true,canDelete:true}, folderAccess:[], autoApprove:false, businessAssignment:null };
 const DEFAULT_AGENTS = [
   {id:1,name:'Chief of Staff',role:'Coordinates priorities across every area of Nyla OS',emoji:'🗂️',color:'#E8E0F5',
    systemPrompt:"You are Nyla's Chief of Staff — you see the whole picture across her tasks, goals, businesses, and school. Help her decide what matters most right now and coordinate across areas. Be direct and strategic.",...AGENT_PERM_DEFAULTS},
@@ -10331,10 +10417,6 @@ const DEFAULT_AGENTS = [
    systemPrompt:"You manage Nyla's calendar. Help her schedule events, set up recurring commitments like classes, and avoid conflicts. Always confirm the specifics (date, time, recurrence, location) before proposing calendar actions.",...AGENT_PERM_DEFAULTS},
   {id:4,name:'Task Manager',role:'Organize, prioritize & track projects',emoji:'✅',color:'#E8E0F5',
    systemPrompt:"You are a highly efficient task management coach for Nyla. Help her break down goals, prioritize work, and stay focused. Be direct and action-oriented.",...AGENT_PERM_DEFAULTS},
-  {id:5,name:'Academic Assistant',role:'Course tracking, assignments & deadlines',emoji:'🎓',color:'#D4EED8',
-   systemPrompt:"You help Nyla stay on top of coursework — assignments, exams, deadlines, and grades. Be organized and proactive about upcoming due dates.",...AGENT_PERM_DEFAULTS},
-  {id:6,name:'Study Buddy',role:'Academic support & study guidance',emoji:'📚',color:'#CBE8F5',
-   systemPrompt:"You are Nyla's knowledgeable study buddy. Help her understand coursework, create study plans, review concepts, and stay motivated academically.",...AGENT_PERM_DEFAULTS},
   {id:7,name:'Research Analyst',role:'Deep research & fact-finding',emoji:'🔎',color:'#E0EAF5',
    systemPrompt:"You are a thorough research analyst. Help Nyla investigate topics, summarize findings clearly, and cite the reasoning behind conclusions.",...AGENT_PERM_DEFAULTS},
   {id:8,name:'Content Strategist',role:'Content planning across all businesses',emoji:'🧭',color:'#F5E8D4',
@@ -10353,7 +10435,7 @@ const DEFAULT_AGENTS = [
    systemPrompt:"You draft clear, well-organized documents for Nyla — notes, reports, and write-ups — and save them to her Notebook when asked.",...AGENT_PERM_DEFAULTS},
   {id:15,name:'Travel Planner',role:'Trip planning & itineraries',emoji:'✈️',color:'#D4F0EE',
    systemPrompt:"You help Nyla plan trips — itineraries, packing, logistics, and timing — and can add travel dates to her calendar.",...AGENT_PERM_DEFAULTS},
-  {id:16,name:'Book and Learning Coach',role:'Reading recommendations & lesson extraction',emoji:'📖',color:'#EAE0F5',
+  {id:16,name:'Reading & Learning Coach',role:'Reading recommendations & lesson extraction',emoji:'📖',color:'#EAE0F5',
    systemPrompt:"You help Nyla get more out of what she reads — summarizing notes, pulling out lessons, and recommending what to read next.",...AGENT_PERM_DEFAULTS},
   {id:17,name:'Habit Coach',role:'Habit building & accountability',emoji:'🔥',color:'#F5E0D4',
    systemPrompt:"You help Nyla build and stick to habits. Be encouraging but honest about what's working and what isn't.",...AGENT_PERM_DEFAULTS},
@@ -10380,6 +10462,7 @@ const DEFAULT_AGENTS = [
   {id:28,name:'Brain Dump Triage Agent',role:'Sorts messy thoughts into tasks, events, ideas & notes',emoji:'🧠',color:'#CBE8F5',
    systemPrompt:"You help Nyla process unstructured brain dumps — pulling out tasks, calendar events, ideas, notes, and shopping items from a messy stream of thoughts, and pointing her to the Brain Dump tool on Home to process them in bulk.",...AGENT_PERM_DEFAULTS},
 ];
+migrateAgentsSep24(); // after DEFAULT_AGENTS, which it compares against
 
 const AGENT_STATUS_META = {
   available:         {label:'Available',          icon:'●', color:'#4CAF77'},
@@ -10391,170 +10474,30 @@ const AGENT_STATUS_META = {
   error:              {label:'Error',              icon:'⚠',  color:'#e57373'},
 };
 
-const AgentCard = ({ agent, onEdit, onDelete, compact=false }) => {
+// A desk in the Office. Its chat is the same AgentChatPanel the Agent Hub uses
+// (js/agent-hub.jsx): one conversation per agent, kept outside React, so the Hub
+// and the desk popup show the same messages, plan previews and Undo buttons.
+const AgentCard = ({ agent }) => {
   const [chatOpen, setChatOpen] = useState(false);
-  const [msgs, setMsgs] = useState([{role:'assistant',text:`Hi Nyla! I'm your ${agent.name}. How can I help you today? ✦`}]);
-  const [input, setInput] = useState('');
-  const att = useAttachments();
-  const [loading, setLoading] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
-  const [pendingPlan, setPendingPlan] = useState(null); // {msgIndex, steps}
-  const [errorState, setErrorState] = useState(false);
-  const [justCompleted, setJustCompleted] = useState(false);
-  const sessionId = useRef(null);
-  const endRef = useRef(null);
-
-  const status = errorState ? 'error'
-    : loading ? 'thinking'
-    : pendingPlan ? (pendingPlan.steps.some(s=>s.status==='needs_info') ? 'needs_information' : 'waiting_approval')
-    : justCompleted ? 'completed'
-    : 'available';
+  const status = agentHub_status(useAgentChat(agent));
   const statusMeta = AGENT_STATUS_META[status];
-
-  const activityLog = JSON.parse(localStorage.getItem('nylaos_agent_activity_log')||'[]');
-  const recentWork = activityLog.find(e=>e.agent===agent.name);
-  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,fullscreen,pendingPlan]);
-
-  useEffect(()=>{
-    const ctx = JSON.parse(localStorage.getItem('nylaos_agent_pending_context')||'null');
-    if(ctx && ctx.source==='idea'){
-      localStorage.removeItem('nylaos_agent_pending_context');
-      setMsgs(m=>[...m,{role:'assistant',text:`I see you shared "${ctx.title}" from your Idea Bank. What would you like me to do with it — turn it into a task, a notebook page, or something else?`}]);
-    }
-  },[]);
-
-  const send = async () => {
-    if((!input.trim()&&!att.items.length)||loading) return;
-    if(!_fbUser){ toast('Sign in (top right) to use AI','error'); return; }
-    if(!sessionId.current) sessionId.current=Date.now();
-    const userText=input.trim();
-    const sent=att.take();
-    const history=[...msgs,{role:'user',text:userText,photos:sent.length?sent:undefined}];
-    setMsgs(history); setInput(''); setLoading(true); setErrorState(false); setJustCompleted(false);
-    try {
-      const agentSystem=agent.systemPrompt+buildAgentContext(agent.name)+AGENT_ACTION_DOCS;
-      const reply = await callClaude({ system:agentSystem, messages:await messagesWithPhotos(history), maxTokens:16000, effort:'medium' });
-      const updated=[...history,{role:'assistant',text:reply}];
-      setMsgs(updated);
-      const rawCmds = parseAgentActions(reply);
-      if(rawCmds.length){
-        setPendingPlan({msgIndex:updated.length-1, steps:buildActionPlan(rawCmds)});
-      }
-      saveChatSession(sessionId.current, agent.name, 'agent', updated);
-    } catch(e) {
-      setErrorState(true);
-      setMsgs(m=>[...m,{role:'assistant',text:`⚠️ ${e.message}`}]);
-    } finally { setLoading(false); }
-  };
-
-  const [undoneBatch, setUndoneBatch] = useState(new Set());
-  const approvePlan = approvedSteps => {
-    const results = executeActionPlan(approvedSteps, agent);
-    const done = results.filter(r=>r.execStatus==='done');
-    const failed = results.filter(r=>r.execStatus!=='done');
-    let summary = done.length ? `✅ Done:\n${done.map(r=>'· '+r.previewLine).join('\n')}` : '';
-    if(failed.length) summary += `${summary?'\n\n':''}⚠️ Needs attention:\n${failed.map(r=>'· '+r.previewLine+' — '+r.reason).join('\n')}`;
-    setMsgs(m=>{
-      const updated=[...m,{role:'assistant',text:summary||'Nothing to do.',batchResults:done.length?results:null}];
-      return updated;
-    });
-    setPendingPlan(null);
-    if(failed.length && !done.length) setErrorState(true);
-    else { setJustCompleted(true); setTimeout(()=>setJustCompleted(false), 6000); }
-  };
-  const undoBatch = (msgIdx, results) => {
-    undoActionBatch(results);
-    setUndoneBatch(s=>new Set(s).add(msgIdx));
-    setMsgs(m=>[...m,{role:'assistant',text:'Undone — everything from that batch was moved to Recently Deleted.'}]);
-  };
-
-  const renderMsgs = () => (<>
-    {msgs.map((m,i)=>(<React.Fragment key={i}>
-      <Bubble m={m}>{m.role==='assistant' ? <RichReply text={stripAgentCmd(m.text)}/> : null}</Bubble>
-      {m.batchResults && !undoneBatch.has(i) && (
-        <div style={{display:'flex',justifyContent:'flex-start'}}>
-          <button onClick={()=>undoBatch(i,m.batchResults)} style={{marginTop:2,padding:'4px 10px',borderRadius:8,background:'transparent',border:`0.5px solid ${C.border}`,color:C.textMuted,fontSize:11,cursor:'pointer'}}>↩ Undo this batch</button>
-        </div>
-      )}
-      {pendingPlan && pendingPlan.msgIndex===i && (
-        <ActionPreviewPanel plan={pendingPlan.steps} onApprove={approvePlan} onCancel={()=>setPendingPlan(null)} />
-      )}
-    </React.Fragment>))}
-    {loading&&<TypingDots label={`${agent.name} is thinking`}/>}
-    <div ref={endRef}/>
-  </>);
-
-  const renderInput = () => (
-    <ChatComposer value={input} onChange={setInput} onSend={send} loading={loading} att={att} placeholder={`Message ${agent.name}…`}
-      extra={!fullscreen && <button onClick={()=>setFullscreen(true)} title="Fullscreen" style={{ width:36, height:36, borderRadius:'50%', background:'transparent', border:`0.5px solid ${C.border}`, color:C.textMuted, fontSize:13, cursor:'pointer', flexShrink:0 }}>⤢</button>}/>
-  );
-
   return (
     <>
-      {chatOpen && fullscreen && (
-        <div style={{ position:'fixed', inset:0, zIndex:9998, background:C.cream, display:'flex', flexDirection:'column' }}>
-          <div style={{ padding:'12px 18px', borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:12, background:C.sidebarBg, flexShrink:0 }}>
-            <div style={{ width:34, height:34, borderRadius:10, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>{agent.emoji}</div>
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:14, fontWeight:500, color:C.rose }}>{agent.name}</div>
-              <div style={{ fontSize:11.5, color:C.textLight }}>{agent.role}</div>
-            </div>
-            <button onClick={()=>{setFullscreen(false); if(compact) setChatOpen(false);}} style={{ background:'none', border:'none', fontSize:20, color:C.textMuted, cursor:'pointer', lineHeight:1 }}>✕</button>
-          </div>
-          <div style={{ flex:1, overflowY:'auto', padding:'16px 18px', display:'flex', flexDirection:'column', gap:10, background:C.lavLight }}><div style={{ maxWidth:820, width:'100%', margin:'0 auto', display:'flex', flexDirection:'column', gap:10 }}>{renderMsgs()}</div></div>
-          {renderInput()}
+      {chatOpen && <AgentChatPanel agent={agent} onClose={()=>setChatOpen(false)} />}
+      {/* An idea sent from the Idea Bank goes to the desk she opens, not to whichever card mounted first. */}
+      <div onClick={()=>{ agentHub_takeIdea(agent); setChatOpen(true); }} title={`${agent.name} — ${statusMeta.label}`}
+        style={{ width:96, display:'flex', flexDirection:'column', alignItems:'center', gap:6, cursor:'pointer', padding:'10px 6px', borderRadius:14,
+          background:C.card, border:`0.5px solid ${C.border}`, transition:'transform 0.15s' }}
+        onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+        onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+        <div style={{ position:'relative' }}>
+          <div className={status==='thinking'||status==='working'?'agent-pulse':''}
+            style={{ '--pulse-color':`${statusMeta.color}80`, width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:21 }}>{agent.emoji}</div>
+          <div style={{ position:'absolute', bottom:-2, right:-2, width:13, height:13, borderRadius:'50%', background:statusMeta.color, border:`2px solid ${C.card}` }}/>
         </div>
-      )}
-      {compact ? (
-        <div onClick={()=>{setChatOpen(true); setFullscreen(true);}} title={`${agent.name} — ${statusMeta.label}`}
-          style={{ width:96, display:'flex', flexDirection:'column', alignItems:'center', gap:6, cursor:'pointer', padding:'10px 6px', borderRadius:14,
-            background:C.card, border:`0.5px solid ${C.border}`, transition:'transform 0.15s' }}
-          onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
-          onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
-          <div style={{ position:'relative' }}>
-            <div className={status==='thinking'||status==='working'?'agent-pulse':''}
-              style={{ '--pulse-color':`${statusMeta.color}80`, width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:21 }}>{agent.emoji}</div>
-            <div style={{ position:'absolute', bottom:-2, right:-2, width:13, height:13, borderRadius:'50%', background:statusMeta.color, border:`2px solid ${C.card}` }}/>
-          </div>
-          <div style={{ fontSize:10.5, fontWeight:600, color:C.text, textAlign:'center', lineHeight:1.25 }}>{agent.name}</div>
-          <div style={{ fontSize:8.5, color:statusMeta.color, fontWeight:600, textTransform:'uppercase', letterSpacing:0.3 }}>{statusMeta.label}</div>
-        </div>
-      ) : (
-      <Card style={{ padding:'18px', display:'flex', flexDirection:'column' }}>
-        <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:10 }}>
-          <div style={{ position:'relative', flexShrink:0 }}>
-            <div style={{ width:44, height:44, borderRadius:13, background:agent.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22 }}>{agent.emoji}</div>
-            <div title={statusMeta.label} style={{ position:'absolute', bottom:-2, right:-2, width:15, height:15, borderRadius:'50%', background:statusMeta.color, border:`2px solid ${C.card}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:7, color:'#fff' }}/>
-          </div>
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:14, fontWeight:500, color:C.rose, marginBottom:2 }}>{agent.name}</div>
-            <div style={{ fontSize:12, color:C.textLight, lineHeight:1.4 }}>{agent.role}</div>
-            <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:4 }}>
-              <span style={{ fontSize:10, color:statusMeta.color, fontWeight:600 }}>{statusMeta.icon} {statusMeta.label}</span>
-              {agent.businessAssignment && <span style={{ fontSize:9.5, padding:'1px 6px', borderRadius:6, background:`${C.accent}18`, color:C.accent }}>{agent.businessAssignment}</span>}
-            </div>
-          </div>
-          <div style={{ display:'flex', gap:4, flexShrink:0 }}>
-            {onEdit&&<button onClick={onEdit} style={{ background:`${C.lavender}90`,border:'none',borderRadius:7,padding:'4px 9px',fontSize:11,color:C.rose,cursor:'pointer' }}>Edit</button>}
-            {onDelete&&<button onClick={onDelete} style={{ background:'none',border:'none',cursor:'pointer',color:C.textMuted,fontSize:18,lineHeight:1 }}>×</button>}
-          </div>
-        </div>
-        {recentWork && (
-          <div style={{ fontSize:10.5, color:C.textMuted, marginBottom:10, padding:'6px 8px', borderRadius:8, background:`${C.pinkLight}` }}>
-            Recent: {recentWork.actions[0]?.preview} <span style={{opacity:0.7}}>· {new Date(recentWork.ts).toLocaleDateString()}</span>
-          </div>
-        )}
-        <button onClick={()=>setChatOpen(o=>!o)} style={{ padding:'7px 0', borderRadius:10, background:chatOpen?C.rose:`${C.pink}55`, color:chatOpen?'#fff':C.rose, border:`0.5px solid ${chatOpen?C.rose:C.border}`, fontSize:12.5, cursor:'pointer', transition:'all 0.15s' }}>
-          {chatOpen?'Close Chat':'✦ Open Chat'}
-        </button>
-        {chatOpen && !fullscreen && (
-          <div style={{ marginTop:10, border:`0.5px solid ${C.border}`, borderRadius:12, overflow:'hidden' }}>
-            <div style={{ height:260, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:10, background:C.lavLight }}>{renderMsgs()}</div>
-            {renderInput()}
-          </div>
-        )}
-      </Card>
-      )}
+        <div style={{ fontSize:10.5, fontWeight:600, color:C.text, textAlign:'center', lineHeight:1.25 }}>{agent.name}</div>
+        <div style={{ fontSize:8.5, color:statusMeta.color, fontWeight:600, textTransform:'uppercase', letterSpacing:0.3 }}>{statusMeta.label}</div>
+      </div>
     </>
   );
 };
@@ -10568,10 +10511,13 @@ const AgentsChat = () => {
   const [apiKey, setApiKey] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [plans, setPlans] = useState({}); // message index -> action plan waiting for Approve
   const sessionId = useRef(null);
   const endRef = useRef(null);
 
-  useEffect(()=>endRef.current?.scrollIntoView({behavior:'smooth'}),[msgs,loading,fullscreen]);
+  // Braces matter: newer Chrome returns a promise from scrollIntoView, and React
+  // would call that as the effect's cleanup when the chat closes, and crash.
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,fullscreen]);
 
   // Kept so the old key row still has a handler; it stores nothing now.
   const saveKey = () => setShowKeyInput(false);
@@ -10588,6 +10534,9 @@ const AgentsChat = () => {
       if(!sessionId.current) sessionId.current=Date.now();
       const updated=[...history,{role:'assistant',text:reply}];
       setMsgs(updated);
+      // Anything it proposes waits for Approve (this chat never ran commands on its own).
+      const planCmds = parseAgentActions(reply);
+      if(planCmds.length) setPlans(p=>({...p, [updated.length-1]: {steps:buildActionPlan(planCmds, 'Nyla AI')}}));
       saveChatSession(sessionId.current,'Nyla AI','main',updated);
     } catch(e) {
       setMsgs(m=>[...m, { role:'assistant', text:`⚠️ ${e.message}` }]);
@@ -10595,7 +10544,10 @@ const AgentsChat = () => {
   };
 
   const renderMsgs = () => (<>
-    {msgs.map((m,i)=><Bubble key={i} m={m}/>)}
+    {msgs.map((m,i)=><React.Fragment key={i}>
+      <Bubble m={m}>{m.role==='assistant'?<RichReply text={stripAgentCmd(m.text)}/>:null}</Bubble>
+      {plans[i] && <AgentEditPlan plan={plans[i]} agent="Nyla AI" onChange={patch=>setPlans(p=>p[i]?({...p,[i]:{...p[i],...patch}}):p)} />}
+    </React.Fragment>)}
     {loading && <TypingDots/>}
     <div ref={endRef}/>
   </>);
@@ -10670,44 +10622,37 @@ const AgentOfficeView = ({ agents }) => {
   );
 };
 
+// Two views of one team: the Agent Hub (js/agent-hub.jsx: list + Chat / Workstation /
+// Prompt / Settings) and the Office desk grid. The old card list lives on inside the Hub.
 const AgentsPanel = () => {
   const KEY = 'nylaos_agents';
   const [agents, setAgents] = useState(()=>{ const s=localStorage.getItem(KEY); return s?JSON.parse(s):DEFAULT_AGENTS; });
-  const [view, setView] = useState('office');
+  // Which view she last used, on this device only.
+  const [view, setViewRaw] = useState(()=>{ try { return localStorage.getItem('nyla_agents_view')==='office' ? 'office' : 'hub'; } catch(e) { return 'hub'; } });
+  const setView = v => { setViewRaw(v); try { localStorage.setItem('nyla_agents_view', v); } catch(e) {} };
   const [showCreate, setShowCreate] = useState(false);
-  const [editId, setEditId] = useState(null);
-  const BLANK_FORM = {name:'',role:'',emoji:'🤖',color:'#E8E0F5',systemPrompt:'',businessAssignment:'',folderAccess:[],autoApprove:false,permissions:{canCreate:true,canEdit:true,canDelete:false}};
-  const [form, setForm] = useState(BLANK_FORM);
-  const COLORS = ['#F2C4CE','#E8E0F5','#D4EED8','#CBE8F5','#FFF9C4','#FFE0B2'];
-  const notebookFolders = JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
 
   const save = a=>{setAgents(a);localStorage.setItem(KEY,JSON.stringify(a));};
-  const submit = ()=>{
-    if(!form.name.trim()) return;
-    if(editId) { save(agents.map(a=>a.id===editId?{...a,...form}:a)); setEditId(null); }
-    else save([...agents,{id:Date.now(),...form}]);
-    setForm(BLANK_FORM); setShowCreate(false);
-  };
-  const startEdit = a=>{setEditId(a.id);setForm({...BLANK_FORM,name:a.name,role:a.role,emoji:a.emoji,color:a.color,systemPrompt:a.systemPrompt,businessAssignment:a.businessAssignment||'',folderAccess:a.folderAccess||[],autoApprove:a.autoApprove||false,permissions:a.permissions||BLANK_FORM.permissions});setShowCreate(true);};
-  const toggleFormFolder = name => setForm(f=>({...f, folderAccess: f.folderAccess.includes(name) ? f.folderAccess.filter(x=>x!==name) : [...f.folderAccess, name]}));
-  const isDefault = a=>a.id>=1&&a.id<=28;
   const [showLog, setShowLog] = useState(false);
   const [agentQ, setAgentQ] = useState('');
   const activityLog = JSON.parse(localStorage.getItem('nylaos_agent_activity_log')||'[]');
   const shownAgents = agents.filter(a=>!agentQ || `${a.name} ${a.role}`.toLowerCase().includes(agentQ.toLowerCase()));
+  const viewBtn = (key, label) => (
+    <button onClick={()=>setView(key)} aria-pressed={view===key} style={{ padding:'9px 14px', background:view===key?C.rose:'transparent', color:view===key?'#fff':C.text, border:'none', fontSize:13, cursor:'pointer' }}>{label}</button>
+  );
 
   return (
-    <div className="fade-in" style={{ maxWidth:1000 }}>
-      <PageTitle subtitle="Tap a desk to chat — attach photos or files, or talk instead of typing"
+    <div className="fade-in" style={{ maxWidth:view==='hub'?1240:1000 }}>
+      <PageTitle subtitle={view==='hub' ? 'Pick an agent to chat, have it write a report, or tune its prompt' : 'Tap a desk to chat — attach photos or files, or talk instead of typing'}
         right={<div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-          <input value={agentQ} onChange={e=>setAgentQ(e.target.value)} placeholder="Find an agent…" style={{ width:150, padding:'8px 14px', borderRadius:20, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:12.5, fontFamily:'inherit' }}/>
+          {view==='office' && <input value={agentQ} onChange={e=>setAgentQ(e.target.value)} placeholder="Find an agent…" style={{ width:150, padding:'8px 14px', borderRadius:20, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:12.5, fontFamily:'inherit' }}/>}
           <div style={{ display:'flex', borderRadius:12, border:`0.5px solid ${C.border}`, overflow:'hidden' }}>
-            <button onClick={()=>setView('office')} style={{ padding:'9px 14px', background:view==='office'?C.rose:'transparent', color:view==='office'?'#fff':C.text, border:'none', fontSize:13, cursor:'pointer' }}>🏢 Office</button>
-            <button onClick={()=>setView('list')} style={{ padding:'9px 14px', background:view==='list'?C.rose:'transparent', color:view==='list'?'#fff':C.text, border:'none', fontSize:13, cursor:'pointer' }}>☰ List</button>
+            {viewBtn('hub', '✦ Hub')}
+            {viewBtn('office', '🏢 Office')}
           </div>
           <button onClick={()=>setShowLog(s=>!s)} style={{ padding:'9px 16px', borderRadius:12, background:showLog?`${C.accent}25`:'transparent', border:`0.5px solid ${C.border}`, color:C.text, fontSize:13, cursor:'pointer' }}>🕐 Activity Log{activityLog.length?` (${activityLog.length})`:''}</button>
-          <button onClick={()=>{setShowCreate(s=>!s);setEditId(null);setForm(BLANK_FORM); }}
-            style={{ padding:'9px 20px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:'pointer' }}>+ Create Agent</button>
+          {view==='office' && <button onClick={()=>setShowCreate(s=>!s)}
+            style={{ padding:'9px 20px', borderRadius:12, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:'pointer' }}>+ Create Agent</button>}
         </div>}>AI Agents</PageTitle>
       {showLog && (
         <Card style={{marginBottom:20, maxHeight:340, overflowY:'auto'}}>
@@ -10725,76 +10670,14 @@ const AgentsPanel = () => {
           ))}
         </Card>
       )}
-      {showCreate && (
+      {view==='office' && showCreate && (
         <Card style={{ marginBottom:20, background:`${C.lavender}40` }}>
-          <SectionHeading>{editId?'Edit Agent':'New Agent'}</SectionHeading>
-          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-            <div style={{ display:'flex', gap:10 }}>
-              <InlineInput value={form.emoji} onChange={e=>setForm(f=>({...f,emoji:e.target.value}))} placeholder="Emoji" style={{ width:64 }}/>
-              <InlineInput value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Agent name" style={{ flex:1 }}/>
-              <InlineInput value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} placeholder="Role description" style={{ flex:1 }}/>
-            </div>
-            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-              <span style={{ fontSize:12, color:C.textLight }}>Color:</span>
-              {COLORS.map(col=>(
-                <button key={col} onClick={()=>setForm(f=>({...f,color:col}))} style={{ width:26,height:26,borderRadius:'50%',background:col,border:`2.5px solid ${form.color===col?C.rose:'transparent'}`,cursor:'pointer' }}/>
-              ))}
-            </div>
-            <TextArea value={form.systemPrompt} height={80} placeholder="System prompt — who is this agent and how should it behave?"
-              onChange={e=>setForm(f=>({...f,systemPrompt:e.target.value}))}/>
-
-            <div style={{borderTop:`0.5px solid ${C.border}`,paddingTop:10,marginTop:2}}>
-              <div style={{fontSize:11,fontWeight:600,color:C.rose,marginBottom:8,letterSpacing:0.3,textTransform:'uppercase'}}>Permissions & Assignment</div>
-              <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:8,flexWrap:'wrap'}}>
-                <span style={{fontSize:12,color:C.textLight}}>Business:</span>
-                <select value={form.businessAssignment} onChange={e=>setForm(f=>({...f,businessAssignment:e.target.value}))}
-                  style={{padding:'5px 8px',borderRadius:8,border:`0.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:12}}>
-                  <option value="">None (personal / cross-business)</option>
-                  {VENTURES.map(v=><option key={v} value={v}>{v}</option>)}
-                </select>
-                <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:C.textLight,cursor:'pointer'}}>
-                  <input type="checkbox" checked={form.autoApprove} onChange={e=>setForm(f=>({...f,autoApprove:e.target.checked}))}/>
-                  Auto-approve single-item actions
-                </label>
-              </div>
-              <div style={{display:'flex',gap:10,marginBottom:8}}>
-                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:C.textLight,cursor:'pointer'}}>
-                  <input type="checkbox" checked={form.permissions.canCreate} onChange={e=>setForm(f=>({...f,permissions:{...f.permissions,canCreate:e.target.checked}}))}/> Can create
-                </label>
-                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:C.textLight,cursor:'pointer'}}>
-                  <input type="checkbox" checked={form.permissions.canEdit} onChange={e=>setForm(f=>({...f,permissions:{...f.permissions,canEdit:e.target.checked}}))}/> Can edit
-                </label>
-                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,color:C.textMuted,cursor:'not-allowed'}} title="Agents can never permanently delete — this is a hard ceiling, not a per-agent setting.">
-                  <input type="checkbox" checked={false} disabled/> Can delete <span style={{fontSize:10}}>(never — hard limit)</span>
-                </label>
-              </div>
-              {notebookFolders.length>0 && (<>
-                <div style={{fontSize:11,color:C.textLight,marginBottom:5}}>Notebook folder access (none checked = all folders):</div>
-                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                  {notebookFolders.map(f=>(
-                    <button key={f.id} onClick={()=>toggleFormFolder(f.name)} type="button" style={{padding:'3px 9px',borderRadius:7,fontSize:10.5,cursor:'pointer',
-                      background:form.folderAccess.includes(f.name)?`${C.accent}30`:'transparent',border:`0.5px solid ${form.folderAccess.includes(f.name)?C.accent:C.border}`,color:form.folderAccess.includes(f.name)?C.accent:C.textMuted}}>{f.icon} {f.name}</button>
-                  ))}
-                </div>
-              </>)}
-            </div>
-
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button onClick={()=>{setShowCreate(false);setEditId(null);}} style={{ padding:'8px 16px',borderRadius:10,background:`${C.pink}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:13,cursor:'pointer' }}>Cancel</button>
-              <button onClick={submit} style={{ padding:'8px 20px',borderRadius:10,background:C.rose,color:'#fff',border:'none',fontSize:13,cursor:'pointer' }}>{editId?'Update':'Create'}</button>
-            </div>
-          </div>
+          <SectionHeading>New Agent</SectionHeading>
+          <AgentSettingsForm showPrompt submitLabel="Create" onCancel={()=>setShowCreate(false)}
+            onSubmit={f=>{ save([...agents,{id:Date.now(),...f}]); setShowCreate(false); }}/>
         </Card>
       )}
-      {view==='office' ? <AgentOfficeView agents={shownAgents} /> : (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))', gap:14 }}>
-          {shownAgents.map(a=>(
-            <AgentCard key={a.id} agent={a}
-              onEdit={()=>startEdit(a)}
-              onDelete={!isDefault(a)?()=>save(agents.filter(x=>x.id!==a.id)):null}/>
-          ))}
-        </div>
-      )}
+      {view==='office' ? <AgentOfficeView agents={shownAgents} /> : <AgentHub agents={agents} onSave={save} />}
     </div>
   );
 };
@@ -11018,8 +10901,6 @@ const CustomNamesPanel = () => {
     {key:'social',label:'Social Media section',default:'Social Media',placeholder:'Content, Socials, Platforms...'},
     {key:'calendar',label:'Calendar section',default:'Calendar',placeholder:'Timeline, Schedule...'},
     {key:'cosmic',label:'Cosmic section',default:'Cosmic',placeholder:'Universe, Stars, Magic...'},
-    {key:'university',label:'University section',default:'University',placeholder:'School, Academy...'},
-    {key:'books',label:'Books section',default:'Books',placeholder:'Library, Reading List...'},
   ];
   return (
     <div className="fade-in" style={{maxWidth:520}}>
@@ -11494,15 +11375,25 @@ const SettingsPanel = ({ sub }) => {
 
 /* ── Second Brain (Obsidian vault) ──────────────────────────────── */
 const vaultMdToHtml = (text) => {
-  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const inline = s => esc(s)
-    .replace(/!\[\]\(([^)]+)\)/g,'')
+  // Vault notes carry text from outside (captured shares, idea and task titles), so
+  // everything is escaped, quotes included, before any tag is made.
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const inline = s => {
+    // Links are taken out of the raw text first: only http(s) addresses with no quotes,
+    // spaces, < or >. Each becomes a \u0000n\u0000 marker (NULs in the text are dropped)
+    // and goes back in as a link built here, after the rest has been escaped.
+    const links = [];
+    const marked = String(s).replace(/\u0000/g,'')
+      .replace(/!\[\]\(([^)]+)\)/g,'')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s"'<>()]+)\)/g,(m,label,url)=>{ links.push({label,url}); return `\u0000${links.length-1}\u0000`; });
+    return esc(marked)
     .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,(m,a,b)=>`<span style="color:${C.rose};font-weight:500">${b||a}</span>`)
-    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noreferrer">$1</a>')
     .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*]+?)\*/g,'$1<em>$2</em>')
     .replace(/~~(.+?)~~/g,'<s>$1</s>')
-    .replace(/`([^`]+?)`/g,'<code>$1</code>');
+    .replace(/`([^`]+?)`/g,'<code>$1</code>')
+    .replace(/\u0000(\d+)\u0000/g,(m,i)=>{ const l=links[+i]; return l ? `<a href="${esc(l.url)}" rel="noopener noreferrer" target="_blank">${esc(l.label)}</a>` : ''; });
+  };
   let body = String(text||'');
   // Frontmatter is metadata for Obsidian, not something to read on screen.
   const fm = body.match(/^---\n([\s\S]*?)\n---\n?/);
@@ -11821,8 +11712,8 @@ const SecondBrainPanel = ({ sub }) => {
 };
 
 /* ── Router ─────────────────────────────────────────────────────── */
-const MainContent = ({ navId, sub }) => (
-  <div key={`${navId}__${sub}`} className="fade-in" style={navId==='notebook'?{ height:'100%' }:undefined}>
+const MainContent = ({ navId, sub, rev=0 }) => (
+  <div key={`${navId}__${sub}${navId==='notebook'||navId==='agents'?'':`__${rev}`}`} className="fade-in" style={navId==='notebook'?{ height:'100%' }:undefined}>
     {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:sub==='Year in Review'?<YearInReview/>:<FocusMode/>)}
     {navId==='calendar'   && (sub==='Event Planner'?<EventPlanner/>:<CalendarPanel sub={sub} />)}
     {navId==='tasks'      && <TasksPanel sub={sub} />}
@@ -11834,8 +11725,7 @@ const MainContent = ({ navId, sub }) => (
     {navId==='goals'      && <GoalsPanel sub={sub} />}
     {navId==='social'     && <SocialMediaPanel sub={sub} />}
     {navId==='cosmic'     && <CosmicPanel sub={sub} />}
-    {navId==='university' && <UniversityPanel sub={sub} />}
-    {navId==='books'      && <BooksPanel sub={sub} />}
+    {/* University was removed from the nav; UniversityPanel is kept in the file but not routed. */}
     {navId==='agents'     && <AgentsPanel />}
     {navId==='settings'   && <SettingsPanel sub={sub} />}
   </div>
@@ -11990,7 +11880,8 @@ const AGENT_ACTION_SPECS = {
       const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
       const folder=folders.find(f=>f.name===(c.folder||'All Notes'));
       const id=Date.now()+Math.floor(Math.random()*1000);
-      pages.push({id,name:c.name,folderId:folder?folder.id:1,content:c.content||'',created:new Date().toISOString(),updated:new Date().toISOString()});
+      // The model's text is escaped into safe HTML: the Notebook editor sets it as innerHTML.
+      pages.push({id,name:c.name,folderId:folder?folder.id:1,content:c.content?agentTextToHtml(c.content):'',created:new Date().toISOString(),updated:new Date().toISOString()});
       localStorage.setItem('nylaos_nb_pages',JSON.stringify(pages));
       const ok=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]').some(x=>x.id===id);
       return {success:ok, navTo:['notebook',c.folder||'All Notes'], undo:{storageKey:'nylaos_nb_pages', type:'notebook_page', ids:[id], name:c.name}};
@@ -12018,9 +11909,11 @@ Object.assign(AGENT_ACTION_SPECS, TASK_EDIT_ACTION_SPECS);
 // (agents never hard-delete, so undo is itself just another safe, recoverable trash move).
 const undoActionBatch = results => {
   let undoneCount = 0;
-  results.forEach(r=>{
+  // Last step first, so two steps that changed the same task unwind in order.
+  results.slice().reverse().forEach(r=>{
     if(r.execStatus!=='done' || !r.undo) return;
-    // Edits undo by putting the earlier versions back rather than trashing anything.
+    // Edits undo by putting back what the batch changed (only where she hasn't changed it since;
+    // see agentEditUndo) rather than trashing anything. agentEditUndoText reports what was left.
     if(typeof r.undo.run==='function'){ try { r.undo.run(); undoneCount++; } catch(e) {} return; }
     const {storageKey, type, ids, name} = r.undo;
     const list = JSON.parse(localStorage.getItem(storageKey)||'[]');
@@ -12044,10 +11937,12 @@ const recurringCount = c => {
   return Math.min(100, Math.max(1, parseInt(c.count)||defaults[c.frequency||'weekly']||12));
 };
 
-const stripAgentCmd = s => (s||'').replace(/\[CMDS:\[[\s\S]*?\]\]/g,'').replace(/\[CMD:\{[\s\S]*?\}\]/g,'').trim();
+// [CMDS:] blocks are cut out by matching brackets (js/agent-edit.jsx), so a "]]" inside one can't leave JSON in the bubble.
+const stripAgentCmd = s => agentEditStripCmds(s||'').replace(/\[CMD:\{[\s\S]*?\}\]/g,'').trim();
 
 // Parses either the new multi-action format [CMDS:[{...},{...}]] or the legacy single [CMD:{...}]
 const parseAgentActions = text => {
+  const scanned = agentEditScanCmds(text); if(scanned) return scanned; // matches brackets, so a "]]" inside the block is fine
   const multi = text.match(/\[CMDS:(\[[\s\S]*?\])\]/);
   if(multi){ try { const arr=JSON.parse(multi[1]); if(Array.isArray(arr)) return arr; } catch(e){} }
   const single = text.match(/\[CMD:(\{[\s\S]*?\})\]/);
@@ -12057,14 +11952,18 @@ const parseAgentActions = text => {
 
 // Builds a preview-able plan from raw commands, flagging any missing required fields
 // so the UI can ask for just that information rather than executing blind.
-const buildActionPlan = rawCmds => rawCmds.map((cmd,i)=>{
-  const spec = AGENT_ACTION_SPECS[cmd.action];
-  if(!spec) return {id:i, cmd, spec:null, previewLine:`Unknown action: ${cmd.action}`, missingFields:[], status:'unsupported'};
-  const missingFields = spec.requiredFields.filter(f=>!cmd[f]);
-  return {id:i, cmd:{...cmd}, spec, previewLine:spec.preview(cmd), missingFields, status: missingFields.length?'needs_info':'ready'};
+// agent (optional: the agent object, or a name for the quick chats) lets the preview
+// show up front which steps that agent isn't allowed to run.
+const buildActionPlan = (rawCmds, agent) => rawCmds.map((raw,i)=>{
+  const norm = agentEditNormalizeCmd(raw);
+  const spec = AGENT_ACTION_SPECS[norm.action];
+  if(!spec) return {id:i, cmd:norm, spec:null, previewLine:`Unknown action: ${norm.action}`, missingFields:[], status:'unsupported'};
+  const cmd = spec.prepare ? spec.prepare(norm) : norm;
+  const permNote = agentEditPermBlock(cmd.action, agent);
+  return {id:i, cmd, spec, previewLine:spec.preview(cmd), permNote, ...agentPlanStepState(spec, cmd, permNote)};
 });
 
-const AGENT_PERMISSIONS_DEFAULT = { canCreate:true, canEdit:true, canDelete:false };
+const AGENT_PERMISSIONS_DEFAULT = { canCreate:true, canEdit:true, canDelete:true };
 
 // Executes an approved plan sequentially, verifying each step and logging the batch —
 // per-step failures don't block the rest of the batch, they're just flagged.
@@ -12077,16 +11976,15 @@ const executeActionPlan = (plan, agent) => {
   const results = plan.map(step=>{
     if(!step.spec) return {...step, execStatus:'failed', reason:'Unsupported action'};
     if(step.missingFields.length) return {...step, execStatus:'failed', reason:`Missing: ${step.missingFields.join(', ')}`};
-    const need = actionPermissionFor(step.cmd.action);
-    if(need==='create' && perms.canCreate===false) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to create items — enable "Can create" in this agent's settings.`};
-    if(need==='edit' && perms.canEdit===false) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to change items — enable "Can edit" in this agent's settings.`};
-    if(need==='delete' && perms.canDelete!==true) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to remove items — enable "Can delete" in this agent's settings.`};
+    // create / edit / delete, checked against canCreate / canEdit / canDelete (see js/agent-edit.jsx).
+    const denied = agentEditPermBlock(step.cmd.action, typeof agent==='string' ? agent : {...agentObj, permissions:perms});
+    if(denied) return {...step, execStatus:'failed', reason:denied};
     if(step.cmd.action==='addNote' && agentObj.folderAccess?.length && !agentObj.folderAccess.includes(step.cmd.folder||'All Notes')) {
       return {...step, execStatus:'failed', reason:`${agentName} doesn't have access to the "${step.cmd.folder||'All Notes'}" folder`};
     }
     try {
-      const {success, navTo, undo} = step.spec.execute(step.cmd);
-      return {...step, execStatus: success?'done':'failed', reason: success?'':'Could not verify the item was saved', navTo, undo};
+      const {success, navTo, undo, summary} = step.spec.execute(step.cmd);
+      return {...step, previewLine: success&&summary ? summary : step.previewLine, execStatus: success?'done':'failed', reason: success?'':'Could not verify the item was saved', navTo, undo};
     } catch(e) { return {...step, execStatus:'failed', reason:e.message||'Error running action'}; }
   });
   const logKey='nylaos_agent_activity_log';
@@ -12100,17 +11998,28 @@ const executeActionPlan = (plan, agent) => {
 };
 
 /* ── Action Preview Panel — Approve All / Edit Actions / Cancel ─── */
-const ActionPreviewPanel = ({ plan, onApprove, onCancel }) => {
+const ActionPreviewPanel = ({ plan, onApprove, onCancel, onStepsChange }) => {
   const [steps, setSteps] = useState(plan);
   const [editing, setEditing] = useState(false);
+  // The chat keeps the edited steps too (onStepsChange): going fullscreen or reopening
+  // the chat draws a fresh panel from `plan`, and it must keep what she unticked or typed.
+  const reported = useRef(plan);
+  useEffect(()=>{ if(steps!==reported.current){ reported.current=steps; if(onStepsChange) onStepsChange(steps); } },[steps]);
   const updateField = (i, field, val) => setSteps(s=>s.map((step,idx)=>{
     if(idx!==i) return step;
     const cmd={...step.cmd,[field]:val};
-    const missingFields=step.spec?step.spec.requiredFields.filter(f=>!cmd[f]):step.missingFields;
-    return {...step, cmd, missingFields, status:missingFields.length?'needs_info':'ready', previewLine: step.spec?step.spec.preview(cmd):step.previewLine};
+    if(!step.spec) return {...step, cmd};
+    return {...step, cmd, ...agentPlanStepState(step.spec, cmd, step.permNote), previewLine: step.spec.preview(cmd)};
   }));
   const removeStep = i => setSteps(s=>s.filter((_,idx)=>idx!==i));
-  const blockedCount = steps.filter(s=>s.status!=='ready').length;
+  // needs_info holds up the whole batch until it's filled in; steps that can't run
+  // (blocked: nothing matched or no permission; unsupported) are left out of it.
+  const blockedCount = steps.filter(s=>s.status==='needs_info').length;
+  const readyCount = steps.filter(s=>s.status==='ready').length;
+  const approveLabel = blockedCount>0 ? `Approve All (fill in ${blockedCount} field${blockedCount>1?'s':''})`
+    : readyCount===0 ? 'Nothing to approve'
+    : readyCount<steps.length ? `Approve ${readyCount} of ${steps.length}` : 'Approve All';
+  const canApprove = blockedCount===0 && readyCount>0;
   return (
     <div style={{border:`0.5px solid ${C.border}`,borderRadius:12,padding:'12px 14px',background:`${C.lavender}18`,marginTop:6}}>
       <div style={{fontSize:11.5,fontWeight:600,color:C.rose,marginBottom:8}}>This will:</div>
@@ -12118,28 +12027,33 @@ const ActionPreviewPanel = ({ plan, onApprove, onCancel }) => {
         {steps.map((step,i)=>(
           <div key={i} style={{padding:'8px 10px',borderRadius:9,background:C.card,border:`0.5px solid ${step.status==='needs_info'?'#F4A261':C.border}`}}>
             <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
-              <span style={{fontSize:12}}>{step.status==='needs_info'?'⚠️':step.status==='unsupported'?'❌':'✅'}</span>
-              <div style={{flex:1,fontSize:12,color:C.text}}>{step.previewLine}</div>
-              {editing && <button onClick={()=>removeStep(i)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14,lineHeight:1}}>×</button>}
+              <span style={{fontSize:12}}>{step.status==='needs_info'?'⚠️':(step.status==='unsupported'||step.status==='blocked')?'❌':'✅'}</span>
+              <div style={{flex:1,minWidth:0,fontSize:12,color:C.text,wordBreak:'break-word'}}>
+                {step.previewLine}
+                {step.note && <div style={{fontSize:11,color:'#d05a5a',marginTop:3,lineHeight:1.4}}>{step.note}</div>}
+                {step.warn && <div style={{fontSize:11,color:C.textMuted,marginTop:3,lineHeight:1.4}}>{step.warn}</div>}
+              </div>
+              {editing && <button onClick={()=>removeStep(i)} aria-label="Remove this step" style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',fontSize:14,lineHeight:1,minWidth:36,minHeight:36,margin:'-10px -8px -10px 0'}}>×</button>}
             </div>
+            {step.spec && step.spec.items && <AgentEditStepList step={step} onExclude={ids=>updateField(i,'excludeIds',ids)} />}
             {(step.status==='needs_info'||editing) && step.spec && (
               <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:7,paddingLeft:20}}>
                 {[...step.missingFields, ...step.spec.recommendedFields.filter(f=>!step.missingFields.includes(f))].map(f=>(
-                  <input key={f} placeholder={f} defaultValue={step.cmd[f]||''} onBlur={e=>updateField(i,f,e.target.value)}
-                    style={{padding:'4px 8px',borderRadius:7,border:`0.5px solid ${step.missingFields.includes(f)?'#F4A261':C.border}`,background:C.pinkLight,color:C.text,fontSize:11,fontFamily:'inherit',width:110}}/>
+                  <input key={f} placeholder={(step.spec.fieldHints&&step.spec.fieldHints[f])||f} defaultValue={step.cmd[f]??''} onBlur={e=>{ if(e.target.value!==String(step.cmd[f]??'')) updateField(i,f,e.target.value); }}
+                    style={{padding:'4px 8px',minHeight:36,boxSizing:'border-box',borderRadius:7,border:`0.5px solid ${step.missingFields.includes(f)?'#F4A261':C.border}`,background:C.pinkLight,color:C.text,fontSize:11.5,fontFamily:'inherit',width:step.spec.fieldHints&&step.spec.fieldHints[f]?150:110,maxWidth:'100%'}}/>
                 ))}
               </div>
             )}
           </div>
         ))}
       </div>
-      <div style={{display:'flex',gap:6}}>
-        <button onClick={()=>onApprove(steps)} disabled={blockedCount>0 && !steps.every(s=>s.status==='ready')}
-          style={{padding:'7px 16px',borderRadius:9,background:blockedCount>0?C.textMuted:C.rose,color:'#fff',border:'none',fontSize:12,cursor:blockedCount>0?'not-allowed':'pointer',opacity:blockedCount>0?0.6:1}}>
-          Approve All{blockedCount>0?` (fill in ${blockedCount} field${blockedCount>1?'s':''})`:''}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        <button onClick={()=>onApprove(steps.filter(s=>s.status==='ready'), steps)} disabled={!canApprove}
+          style={{padding:'7px 16px',minHeight:36,borderRadius:9,background:canApprove?C.rose:C.textMuted,color:'#fff',border:'none',fontSize:12,cursor:canApprove?'pointer':'not-allowed',opacity:canApprove?1:0.6}}>
+          {approveLabel}
         </button>
-        <button onClick={()=>setEditing(e=>!e)} style={{padding:'7px 14px',borderRadius:9,background:'transparent',border:`0.5px solid ${C.border}`,color:C.text,fontSize:12,cursor:'pointer'}}>{editing?'Done editing':'Edit Actions'}</button>
-        <button onClick={onCancel} style={{padding:'7px 14px',borderRadius:9,background:'transparent',border:'none',color:C.textMuted,fontSize:12,cursor:'pointer'}}>Cancel</button>
+        <button onClick={()=>setEditing(e=>!e)} style={{padding:'7px 14px',minHeight:36,borderRadius:9,background:'transparent',border:`0.5px solid ${C.border}`,color:C.text,fontSize:12,cursor:'pointer'}}>{editing?'Done editing':'Edit Actions'}</button>
+        <button onClick={onCancel} style={{padding:'7px 14px',minHeight:36,borderRadius:9,background:'transparent',border:'none',color:C.textMuted,fontSize:12,cursor:'pointer'}}>Cancel</button>
       </div>
     </div>
   );
@@ -12150,7 +12064,6 @@ const AGENT_CMD_DOCS = `
 
 You can take direct action in Nyla's dashboard. When she asks you to create or update something, respond conversationally then include ONE command block at the END:
 - Add task:              [CMD:{"action":"addTask","text":"task text"}]
-- Complete task:         [CMD:{"action":"completeTask","text":"partial task name"}]
 - Add goal:              [CMD:{"action":"addGoal","title":"goal title","category":"Personal|Business|Health|Financial|Creative|Spiritual|Education","periodType":"monthly|quarterly|yearly","periodValue":"YYYY-MM or YYYY-QN or YYYY","targetDate":"YYYY-MM-DD"}]
 - Update goal progress:  [CMD:{"action":"updateGoalProgress","title":"goal title","progress":50}]
 - Add single event:      [CMD:{"action":"addEvent","date":"YYYY-MM-DD","text":"event description"}]
@@ -12192,10 +12105,9 @@ const execAgentCmd = text => {
       const t=JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
       t.push({id:Date.now(),text:cmd.text,done:false,created:new Date().toISOString()});
       localStorage.setItem('nylaos_tasks',JSON.stringify(t));
-    } else if (cmd.action==='completeTask') {
-      const t=JSON.parse(localStorage.getItem('nylaos_tasks')||'[]');
-      const q=(cmd.text||'').toLowerCase();
-      localStorage.setItem('nylaos_tasks',JSON.stringify(t.map(x=>x.text.toLowerCase().includes(q)?{...x,done:true}:x)));
+    } else if (actionPermissionFor(agentEditNormalizeCmd(cmd).action)!=='create') {
+      // Changes to existing things (tasks, goal progress) never run from here: the chat shows them as a preview to approve.
+      return;
     } else if (cmd.action==='addGoal') {
       const now=new Date();
       const g=JSON.parse(localStorage.getItem('nylaos_goals')||'[]');
@@ -12203,10 +12115,6 @@ const execAgentCmd = text => {
       const pv=cmd.periodValue||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
       g.push({id:Date.now(),title:cmd.title,description:cmd.description||'',targetDate:cmd.targetDate||'',category:cmd.category||'',progress:0,periodType:pt,periodValue:pv,created:now.toISOString()});
       localStorage.setItem('nylaos_goals',JSON.stringify(g));
-    } else if (cmd.action==='updateGoalProgress') {
-      const g=JSON.parse(localStorage.getItem('nylaos_goals')||'[]');
-      const q=(cmd.title||'').toLowerCase();
-      localStorage.setItem('nylaos_goals',JSON.stringify(g.map(x=>x.title.toLowerCase().includes(q)?{...x,progress:Math.min(100,Math.max(0,parseInt(cmd.progress)||0))}:x)));
     } else if (cmd.action==='addEvent') {
       const e=JSON.parse(localStorage.getItem('nylaos_events')||'[]');
       e.push({id:Date.now(),date:cmd.date,text:cmd.text});
@@ -12233,10 +12141,10 @@ const execAgentCmd = text => {
       const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
       const pages=JSON.parse(localStorage.getItem('nylaos_nb_pages')||'[]');
       const folder=folders.find(f=>f.name===(cmd.folder||'All Notes'));
-      pages.push({id:Date.now(),name:cmd.name||'New Note',folderId:folder?folder.id:1,content:cmd.content||'',created:new Date().toISOString(),updated:new Date().toISOString()});
+      pages.push({id:Date.now(),name:cmd.name||'New Note',folderId:folder?folder.id:1,content:cmd.content?agentTextToHtml(cmd.content):'',created:new Date().toISOString(),updated:new Date().toISOString()}); // escaped: the editor sets it as innerHTML
       localStorage.setItem('nylaos_nb_pages',JSON.stringify(pages));
     } else if (cmd.action==='createNotebook') {
-      const folders=JSON.parse(localStorage.getItem('nylaos_nb_folders')||'[]');
+      const folders=agentEditLoadFolders(); // keeps the four default notebooks when none are saved yet
       folders.push({id:Date.now(),name:cmd.name||'New Notebook',created:new Date().toISOString()});
       localStorage.setItem('nylaos_nb_folders',JSON.stringify(folders));
     }
@@ -12244,7 +12152,7 @@ const execAgentCmd = text => {
 };
 
 /* ── Floating AI Chat ───────────────────────────────────────────── */
-const FLOAT_SYSTEM = `You are Nyla's personal dashboard assistant — warm, wise, and efficient. You help manage her tasks, goals, calendar, and notes. Always be warm and concise.${AGENT_CMD_DOCS}`;
+const FLOAT_SYSTEM = `You are Nyla's personal dashboard assistant — warm, wise, and efficient. You help manage her tasks, goals, calendar, and notes. Always be warm and concise.${AGENT_CMD_DOCS}${TASK_EDIT_ACTION_DOCS}`;
 
 const FloatingChat = () => {
   const [open, setOpen] = useState(false);
@@ -12252,6 +12160,7 @@ const FloatingChat = () => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [plans, setPlans] = useState({}); // message index -> action plan waiting for Approve
   const sessionId = useRef(null);
   const endRef = useRef(null);
   useEffect(()=>{ if(open||fullscreen) endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs,loading,open,fullscreen]);
@@ -12268,7 +12177,10 @@ const FloatingChat = () => {
       const reply = await callClaude({ system: FLOAT_SYSTEM+buildAgentContext(null), messages: await messagesWithPhotos(history), maxTokens:8000, effort:'low' });
       const updated=[...history,{role:'assistant',text:reply}];
       setMsgs(updated);
-      execAgentCmd(reply);
+      // Changes to existing tasks (and any [CMDS:] block) wait for Approve; a lone old add command still runs.
+      const planCmds = agentEditChatCmds(reply);
+      if(planCmds) setPlans(p=>({...p, [updated.length-1]: {steps:buildActionPlan(planCmds, 'Nyla AI')}}));
+      else execAgentCmd(reply);
       saveChatSession(sessionId.current,'Quick Chat','float',updated);
     } catch(e) {
       setMsgs(m=>[...m,{role:'assistant',text:`⚠️ ${e.message}`}]);
@@ -12276,7 +12188,10 @@ const FloatingChat = () => {
   };
 
   const renderMsgs = () => (<>
-    {msgs.map((m,i)=><Bubble key={i} m={m}>{m.role==='assistant'?<RichReply text={m.text.replace(/\[CMD:\{[\s\S]*?\}\]/,'').trim()}/>:null}</Bubble>)}
+    {msgs.map((m,i)=><React.Fragment key={i}>
+      <Bubble m={m}>{m.role==='assistant'?<RichReply text={stripAgentCmd(m.text)}/>:null}</Bubble>
+      {plans[i] && <AgentEditPlan plan={plans[i]} agent="Nyla AI" onChange={patch=>setPlans(p=>p[i]?({...p,[i]:{...p[i],...patch}}):p)} />}
+    </React.Fragment>)}
     {loading && <TypingDots/>}
     <div ref={endRef}/>
   </>);
@@ -12490,6 +12405,16 @@ const App = () => {
   const [activeNav, setActiveNav] = useState(_last?.nav || 'home');
   const [activeSub, setActiveSub] = useState(_last?.sub || 'Overview');
   useEffect(()=>{ try { localStorage.setItem('nyla_last_view', JSON.stringify({ nav:activeNav, sub:activeSub })); } catch(e) {} },[activeNav, activeSub]);
+  // Data written outside React (phone captures, agent quick-chat edits) remounts the open view, so
+  // no panel keeps an old copy of a list in state and saves it back over the new items. The capture
+  // inbox imports nothing until this listener is in place (window._remountOnDataChange).
+  const [dataRev, setDataRev] = useState(0);
+  useEffect(() => {
+    const onData = () => setDataRev(r => r + 1);
+    window.addEventListener('nyla:data-changed', onData);
+    window._remountOnDataChange = true;
+    return () => { window.removeEventListener('nyla:data-changed', onData); window._remountOnDataChange = false; };
+  }, []);
   const [secCollapsed, setSecCollapsed] = useState(() => window.innerWidth < 700);
 
   // Auto-collapse secondary sidebar when switching to mobile
@@ -12538,7 +12463,7 @@ const App = () => {
           {isMobile && !isNotebook && (
             <MobileSubTabs navItem={navItem} activeSub={activeSub} onSubSelect={setActiveSub} />
           )}
-          <MainContent navId={activeNav} sub={activeSub} />
+          <MainContent navId={activeNav} sub={activeSub} rev={dataRev} />
         </main>
       </div>
       {isMobile && <MobileBottomNav activeNav={activeNav} onNavSelect={handleNavSelect} />}
