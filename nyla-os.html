@@ -155,6 +155,13 @@
 })();
 </script>
 <div id="root"></div>
+<!-- Feature modules. They load BEFORE the main script below, so each keeps its
+     top level free of app globals; see the note at the top of each file. -->
+<script type="text/babel" src="js/energy.jsx"></script>
+<script type="text/babel" src="js/brief.jsx"></script>
+<script type="text/babel" src="js/memories.jsx"></script>
+<script type="text/babel" src="js/agent-edit.jsx"></script>
+<script type="text/babel" src="js/capture.jsx"></script>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
 
@@ -1157,6 +1164,7 @@ let _cloudListener=null;
     _fbDb=firebase.firestore();
     _fbAuth.onAuthStateChanged(user=>{
       _fbUser=user;
+      if(user){ try { startCaptureInbox(); } catch(e) { console.warn('Capture inbox', e); } }
       // Tear down old real-time listener
       if(_cloudListener){_cloudListener();_cloudListener=null;}
       if(user){
@@ -1360,7 +1368,7 @@ const TAG_COLORS = {
 
 /* ── Nav ────────────────────────────────────────────────────────── */
 const NAV = [
-  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes','Brain Dump'] },
+  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes','Brain Dump','Year in Review'] },
   { id:'calendar',   label:'Calendar',   sub:['Monthly','Weekly','Daily','Agenda','Quarterly','Yearly','Event Planner','Recently Deleted'] },
   { id:'tasks',      label:'Tasks',      sub:['Today','Upcoming','All Tasks','To Do List','Eisenhower','Projects','Completed','Recently Deleted'] },
   { id:'lists',      label:'Lists & Habits', sub:['Habits','Shopping List','Bucket List','Bored Bucket','Pros & Cons','Recently Deleted'] },
@@ -2320,6 +2328,9 @@ const HomeOverview = () => {
         </div>
       </div>
 
+      <WrappedBanner />
+      <MorningBrief />
+
       <div style={{ display:'grid', gridTemplateColumns: isMobile?'1fr':'1.35fr 1fr', gap:16 }}>
         {/* Today's tasks */}
         <Card style={{ gridRow: isMobile?'auto':'span 2' }}>
@@ -2442,6 +2453,7 @@ const HomeOverview = () => {
             onChange={e=>{ setNote(e.target.value); localStorage.setItem('nylaos_quicknote',e.target.value); }} />
         </Card>
       </div>
+      <OnThisDay />
     </div>
   );
 };
@@ -4132,8 +4144,9 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
           ) : (
             <div onClick={()=>!t.done&&setEditing(true)} style={{ fontSize:14, color:t.done?C.textMuted:C.text, textDecoration:t.done?'line-through':'none', cursor:t.done?'default':'text', lineHeight:1.45, wordBreak:'break-word' }}>{t.text}</div>
           )}
-          {(!hideStatus || due || t.repeat || linkedGoal || t.venture || t.notes) && (
+          {(!hideStatus || due || t.repeat || linkedGoal || t.venture || t.notes || !t.done) && (
             <div style={{ display:'flex', gap:5, marginTop:4, flexWrap:'wrap', alignItems:'center' }}>
+              {!t.done && <EnergyChip t={t} onUpdate={onUpdate} />}
               {!hideStatus && (()=>{ const st = TASK_STATUS.find(x=>x.key===taskStatusKey(t)); return (
                 <span style={{ fontSize:10.5, padding:'2px 8px', borderRadius:10, background: st.key==='progress'?`${C.accent}22`:st.key==='done'?'#3f9a6a1f':`${C.lavender}80`, color: st.key==='todo'?C.textLight:st.tone(), fontWeight:500 }}>{st.icon} {st.label}</span>
               ); })()}
@@ -4246,12 +4259,13 @@ const TasksPanel = ({ sub }) => {
       ? <EmptyState icon="✓" title="Nothing finished yet" text="Check something off and it lands here." />
       : Object.entries(groups).map(([k,list])=><TaskGroup key={k} title={k==='Earlier'?'Earlier':prettyDue(k).label} count={list.length}>{list.map(row)}</TaskGroup>);
   } else if (sub==='Today') {
-    const overdue = open.filter(t=>t.calendarDate && t.calendarDate<today).sort(byDate);
-    const todays = open.filter(t=>t.calendarDate===today);
+    const overdue = sortForPhase(open.filter(t=>t.calendarDate && t.calendarDate<today).sort(byDate));
+    const todays = sortForPhase(open.filter(t=>t.calendarDate===today));
     const doneToday = mine.filter(t=>t.done && t.completedDate===today);
     const total = todays.length + overdue.length + doneToday.length;
     const pct = total ? Math.round(doneToday.length/total*100) : 0;
     body = (<>
+      <PhaseSortBanner onChange={()=>setTasks(t=>[...t])} />
       {total>0 && (
         <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:20, padding:'14px 18px', borderRadius:16, background:C.gradA }}>
           <div style={{ width:46, height:46, borderRadius:'50%', background:`conic-gradient(${C.rose} ${pct*3.6}deg, ${C.card} 0)`, display:'grid', placeItems:'center', flexShrink:0 }}>
@@ -11809,7 +11823,7 @@ const SecondBrainPanel = ({ sub }) => {
 /* ── Router ─────────────────────────────────────────────────────── */
 const MainContent = ({ navId, sub }) => (
   <div key={`${navId}__${sub}`} className="fade-in" style={navId==='notebook'?{ height:'100%' }:undefined}>
-    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:<FocusMode/>)}
+    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:sub==='Year in Review'?<YearInReview/>:<FocusMode/>)}
     {navId==='calendar'   && (sub==='Event Planner'?<EventPlanner/>:<CalendarPanel sub={sub} />)}
     {navId==='tasks'      && <TasksPanel sub={sub} />}
     {navId==='lists'      && (sub==='Pros & Cons'?<ProsConsMaker/>:sub==='Shopping List'?<SimpleChecklist storageKey="nylaos_shopping_list" title="Shopping List" placeholder="Add something to pick up…" />:sub==='Bucket List'?<BucketList/>:sub==='Bored Bucket'?<BoredBucket/>:sub==='Recently Deleted'?<TrashPanel type={['habit','bucket_item']} />:<HabitTracker/>)}
@@ -11880,6 +11894,7 @@ const buildAgentContext = (agentName = null) => {
       }
     } catch(e) {}
 
+    try { ctx += agentTaskContext(); } catch(e) {}
     ctx += '\n--- END CONTEXT ---\n';
     return ctx;
   } catch(e) { return ''; }
@@ -11996,12 +12011,17 @@ const AGENT_ACTION_SPECS = {
   },
 };
 
+// Actions that change or remove existing items live in js/agent-edit.jsx.
+Object.assign(AGENT_ACTION_SPECS, TASK_EDIT_ACTION_SPECS);
+
 // Session-scoped undo: moves everything a completed batch created into Recently Deleted
 // (agents never hard-delete, so undo is itself just another safe, recoverable trash move).
 const undoActionBatch = results => {
   let undoneCount = 0;
   results.forEach(r=>{
     if(r.execStatus!=='done' || !r.undo) return;
+    // Edits undo by putting the earlier versions back rather than trashing anything.
+    if(typeof r.undo.run==='function'){ try { r.undo.run(); undoneCount++; } catch(e) {} return; }
     const {storageKey, type, ids, name} = r.undo;
     const list = JSON.parse(localStorage.getItem(storageKey)||'[]');
     ids.forEach(id=>{
@@ -12057,7 +12077,10 @@ const executeActionPlan = (plan, agent) => {
   const results = plan.map(step=>{
     if(!step.spec) return {...step, execStatus:'failed', reason:'Unsupported action'};
     if(step.missingFields.length) return {...step, execStatus:'failed', reason:`Missing: ${step.missingFields.join(', ')}`};
-    if(perms.canCreate===false) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to create items — enable "Can create" in this agent's settings.`};
+    const need = actionPermissionFor(step.cmd.action);
+    if(need==='create' && perms.canCreate===false) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to create items — enable "Can create" in this agent's settings.`};
+    if(need==='edit' && perms.canEdit===false) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to change items — enable "Can edit" in this agent's settings.`};
+    if(need==='delete' && perms.canDelete!==true) return {...step, execStatus:'failed', reason:`${agentName} does not have permission to remove items — enable "Can delete" in this agent's settings.`};
     if(step.cmd.action==='addNote' && agentObj.folderAccess?.length && !agentObj.folderAccess.includes(step.cmd.folder||'All Notes')) {
       return {...step, execStatus:'failed', reason:`${agentName} doesn't have access to the "${step.cmd.folder||'All Notes'}" folder`};
     }
@@ -12158,7 +12181,7 @@ Available actions and their fields:
 Rules:
 - If she mentions a recurring commitment (e.g. "class Monday Wednesday Friday at 10am"), use addRecurringEvent and ask conversationally (in your text, not the command) for whatever required info is missing — course name, end time, start date, end date, location, reminder — rather than guessing. You can still include the command with the fields you do have; the dashboard will prompt her for anything missing before she can approve.
 - Only include fields you actually know; never invent a date or detail that wasn't given.
-- Always include every action from a multi-part request in the SAME [CMDS:...] block so she reviews them together.`;
+- Always include every action from a multi-part request in the SAME [CMDS:...] block so she reviews them together.` + TASK_EDIT_ACTION_DOCS;
 
 const execAgentCmd = text => {
   const match = text.match(/\[CMD:(\{[\s\S]*?\})\]/);
