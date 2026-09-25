@@ -771,7 +771,7 @@ const AgentHubWorkstation = ({ agent }) => {
                 </span>
               </button>
               <button onClick={() => downloadAsMarkdown(p.name || 'Report', p.content || '')} title="Download as Markdown" style={small}>⬇ .md</button>
-              <button onClick={() => printAsPdf(p.name || 'Report', p.content || '', `${p.agentName || agent.name}${when ? ' · ' + when : ''}`)} title="Print or save as PDF" style={small}>🖨 PDF</button>
+              <button onClick={() => printAsPdf(p.name || 'Report', p.content || '', `${p.agentName || agent.name}${when ? ' · ' + when : ''}`)} title="Download as a PDF" style={small}>📄 PDF</button>
             </div>
           );
         })}
