@@ -149,22 +149,36 @@
   var asApp = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true
     || location.search.indexOf('cover=1') > -1;
   if (!asApp) { cover.remove(); return; }
-  var hide = function () { cover.classList.add('ac-gone'); setTimeout(function () { cover.remove(); }, 500); };
-  window.addEventListener('load', function () { setTimeout(hide, 420); });
-  setTimeout(hide, 4000); // never leave anyone stuck behind it
+  var hide = function () { if (cover.classList.contains('ac-gone')) return; window.__coverLifted = Math.round(performance.now()); cover.classList.add('ac-gone'); setTimeout(function () { cover.remove(); }, 500); };
+  // Lift it once the app has drawn something, not on a fixed timer (a timer lifted it
+  // while the app was still loading, leaving a blank screen). 15 s is only a safety net.
+  var root = document.getElementById('root');
+  // Real content, not just React's first empty wrapper.
+  var ready = function () { return root && (root.textContent || '').trim().length > 40; };
+  var obs = window.MutationObserver && root ? new MutationObserver(function () { if (ready()) { obs.disconnect(); setTimeout(hide, 250); } }) : null;
+  if (obs) obs.observe(root, { childList: true, subtree: true, characterData: true }); else window.addEventListener('load', function () { setTimeout(hide, 420); });
+  setTimeout(hide, 15000); // never leave anyone stuck behind it
 })();
 </script>
 <div id="root"></div>
 <!-- Feature modules. They load BEFORE the main script below, so each keeps its
      top level free of app globals; see the note at the top of each file. -->
-<script type="text/babel" src="js/energy.jsx"></script>
-<script type="text/babel" src="js/brief.jsx"></script>
-<script type="text/babel" src="js/memories.jsx"></script>
-<script type="text/babel" src="js/agent-edit.jsx"></script>
-<script type="text/babel" src="js/agent-hub.jsx"></script>
-<script type="text/babel" src="js/agent-prompts.jsx"></script>
-<script type="text/babel" src="js/capture.jsx"></script>
-<script type="text/babel">
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/energy.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/brief.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/memories.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/agent-edit.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/agent-hub.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/agent-prompts.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/capture.jsx"></script>
+<!-- data-presets="react" (all eight babel tags): Babel only turns JSX into JS and leaves the rest
+     as modern JavaScript, which every browser she uses runs as is. The default also rewrote the whole
+     app to old-style JS with a 3 MB source map on every open: about 4.7 s of the load, measured Sept 23.
+     data-plugins replaces Babel's default plugin list, whose object-rest-spread step writes the same
+     helper names (_excluded) at the top of several files; with native const those collide and stop
+     the app loading. flow-strip-types is the harmless one of the three defaults, kept so a plugin
+     list is present. With native const/let, a top-level name is shared across these scripts but is
+     not a window property, and two scripts may not declare the same top-level name. -->
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types">
 const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
 
 

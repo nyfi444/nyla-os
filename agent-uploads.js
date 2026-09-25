@@ -26,7 +26,7 @@ function withTimeout(promise, ms, message) {
 // PDFs never reach these: they are sent to Claude as documents instead.
 async function extractPdfText() { throw new Error('PDFs are sent to Claude whole.'); }
 async function extractPdfPageImages() { throw new Error('PDFs are sent to Claude whole.'); }
-function toast(msg) { if (typeof showToast === 'function') showToast(msg); else console.info(msg); }
+if (typeof toast !== 'function') window.toast = function (msg) { if (typeof showToast === 'function') showToast(msg); else console.info(msg); };
 function fileExt(name) { const m = String(name || '').toLowerCase().match(/\.([a-z0-9]{1,8})$/); return m ? m[1] : ''; }
 
 /* ── Reading uploaded files ─────────────────────────────────────────

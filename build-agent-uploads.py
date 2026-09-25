@@ -52,6 +52,10 @@ function fileExt(name) { const m = String(name || '').toLowerCase().match(/\\.([
 '''
 
 
+NAIVE_TOAST = "function toast(msg) { if (typeof showToast === 'function') showToast(msg); else console.info(msg); }"
+GUARDED_TOAST = "if (typeof toast !== 'function') window.toast = function (msg) { if (typeof showToast === 'function') showToast(msg); else console.info(msg); };"
+
+
 def main():
     src = SOURCE.read_text()
     body = src[:src.index('function uploadZoneHtml(')].rstrip()
@@ -72,8 +76,15 @@ def main():
         body = body.replace(old, new_text)
     out = PRELUDE + body + '\n'
     for target in TARGETS:
-        target.write_text(out)
-        print(f'wrote {target} ({len(out.splitlines())} lines)')
+        text = out
+        if target == TARGETS[0]:
+            # Nyla OS runs its own code as modern JS (data-presets="react"), where its
+            # `const toast` and a global `function toast` here can't both exist. So
+            # this copy only supplies toast when the page has none.
+            text = text.replace(NAIVE_TOAST, GUARDED_TOAST)
+            assert GUARDED_TOAST in text
+        target.write_text(text)
+        print(f'wrote {target} ({len(text.splitlines())} lines)')
 
 
 if __name__ == '__main__':
