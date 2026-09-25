@@ -10,8 +10,22 @@ helpers the student app would otherwise provide.
 
 Run after changing student-planner/js/uploads.js:
 
-    python3 build-agent-uploads.py
+    python3 build-agent-uploads.py --check   # report only, writes nothing
+    python3 build-agent-uploads.py           # write both copies
+
+It refuses to write anything if the output still depends on something
+only the student app has. uploads.js keeps growing ties to Semester HQ
+(a local vendor/ copy of heic2any, the diag logger in diagnostics.js),
+and a blind copy would break photo uploads in both OSes. So the output is
+checked for: vendor/ paths neither OS hosts, any top-level name from the
+student app's other js/ files that the prelude doesn't supply, and a
+syntax error (node --check). Anything it finds is listed; fix it here
+(a BODY_FIXES entry or a prelude stand-in), then run it again.
 """
+import re
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -47,6 +61,8 @@ function withTimeout(promise, ms, message) {
 async function extractPdfText() { throw new Error('PDFs are sent to Claude whole.'); }
 async function extractPdfPageImages() { throw new Error('PDFs are sent to Claude whole.'); }
 function toast(msg) { if (typeof showToast === 'function') showToast(msg); else console.info(msg); }
+// uploads.js reports problems through Semester HQ's diag logger; neither OS has one.
+if (typeof diag === 'undefined') window.diag = { warn: function () { console.warn.apply(console, arguments); }, error: function () { console.error.apply(console, arguments); } };
 function fileExt(name) { const m = String(name || '').toLowerCase().match(/\\.([a-z0-9]{1,8})$/); return m ? m[1] : ''; }
 
 '''
@@ -56,7 +72,94 @@ NAIVE_TOAST = "function toast(msg) { if (typeof showToast === 'function') showTo
 GUARDED_TOAST = "if (typeof toast !== 'function') window.toast = function (msg) { if (typeof showToast === 'function') showToast(msg); else console.info(msg); };"
 
 
+# Paths only the student app hosts, swapped for what both OSes load today.
+BODY_FIXES = [
+    ("'vendor/heic2any/heic2any.min.js'", "'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js'"),
+]
+# Names the prelude above supplies, so the body may use them.
+PRELUDE_PROVIDES = {'toast', 'diag', 'loadScriptOnce', 'withTimeout', 'extractPdfText', 'extractPdfPageImages', 'fileExt', 'showToast'}
+
+
+def student_globals():
+    """Top-level names declared by the student app's other js/ files."""
+    names = set()
+    for f in SOURCE.parent.glob('*.js'):
+        if f.name == SOURCE.name:
+            continue
+        for m in re.finditer(r'^(?:export\s+)?(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)', f.read_text(), re.M):
+            names.add(m.group(1))
+    return names
+
+
+def code_only(js):
+    """The code with comments and string contents blanked, for name scanning."""
+    js = re.sub(r'/\*[\s\S]*?\*/', ' ', js)
+    js = re.sub(r'(?<![:\\])//[^\n]*', ' ', js)
+    return re.sub(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`", "''", js)
+
+
+def problems_in(out, host):
+    found = []
+    if 'vendor/' in out:
+        found.append("a vendor/ path neither OS hosts: " + ', '.join(sorted(set(re.findall(r"vendor/[\w./-]+", out)))))
+    code = code_only(out)
+    declared = set(re.findall(r'(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)', code))
+    used = set(re.findall(r'(?<![\w$.])([A-Za-z_$][\w$]*)\b', code))
+    missing = sorted(n for n in (student_globals() & used) - declared - PRELUDE_PROVIDES)
+    if missing:
+        found.append('names only the student app defines: ' + ', '.join(missing))
+    with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False) as tmp:
+        tmp.write(out)
+    try:
+        r = subprocess.run(['node', '--check', tmp.name], capture_output=True, text=True)
+        if r.returncode != 0:
+            lines = r.stderr.strip().splitlines()
+            found.append('a syntax error: ' + next((l for l in lines if 'Error' in l), lines[0] if lines else '?'))
+    except FileNotFoundError:
+        found.append('node is not installed, so the syntax check could not run')
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
+    found += clashes_with_host(out, host)
+    return found
+
+
+# The pages that load each copy, and the scripts whose top-level names share one
+# global scope with it. A const/let/class in one and any declaration of the same
+# name in the other stops the later script from running: that is how Nyla OS's
+# `const toast` and this file's `function toast` broke the app on Sept 24 2026.
+HOSTS = {
+    0: [HERE / 'nyla-os.html', *sorted((HERE / 'js').glob('*.jsx'))],
+    1: [HERE / 'semester-hq-dashboard' / 'semester-hq-biz.html', *sorted((HERE / 'semester-hq-dashboard').glob('os-*.js'))],
+}
+DECL = re.compile(r'^(?:export\s+)?(?:async\s+)?(const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)', re.M)
+
+
+def top_level(js):
+    return {m.group(2): m.group(1) for m in DECL.finditer(js)}
+
+
+HOST_NAMES = {0: 'Nyla OS', 1: 'the Business OS'}
+
+
+def clashes_with_host(out, i):
+    mine = top_level(out)
+    found = []
+    if True:
+        theirs = {}
+        for f in HOSTS[i]:
+            if f.exists():
+                text = f.read_text()
+                if f.suffix == '.html':
+                    text = '\n'.join(re.findall(r'<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)</script>', text))
+                theirs.update(top_level(text))
+        bad = sorted(n for n in mine.keys() & theirs.keys() if 'const' in (mine[n], theirs[n]) or 'let' in (mine[n], theirs[n]) or 'class' in (mine[n], theirs[n]))
+        if bad:
+            found.append(f'top-level names that clash with {HOST_NAMES[i]}: ' + ', '.join(bad))
+    return found
+
+
 def main():
+    check_only = '--check' in sys.argv[1:]
     src = SOURCE.read_text()
     body = src[:src.index('function uploadZoneHtml(')].rstrip()
     # Wording: these messages are shown to Nyla inside her own OSes, not to
@@ -74,17 +177,34 @@ def main():
         ('so a student couldn\'t even\n   select the Word syllabus they had', 'so you couldn\'t even\n   select the Word document you had'),
     ]:
         body = body.replace(old, new_text)
+    for old, new_text in BODY_FIXES:
+        body = body.replace(old, new_text)
     out = PRELUDE + body + '\n'
-    for target in TARGETS:
+    texts = []
+    for i, target in enumerate(TARGETS):
         text = out
-        if target == TARGETS[0]:
+        if i == 0:
             # Nyla OS runs its own code as modern JS (data-presets="react"), where its
             # `const toast` and a global `function toast` here can't both exist. So
             # this copy only supplies toast when the page has none.
             text = text.replace(NAIVE_TOAST, GUARDED_TOAST)
             assert GUARDED_TOAST in text
-        target.write_text(text)
-        print(f'wrote {target} ({len(text.splitlines())} lines)')
+        texts.append(text)
+    found = [f'{HOST_NAMES[i]}: {p}' for i, text in enumerate(texts) for p in problems_in(text, i)]
+    if found:
+        print('Not writing anything. The generated file still has:', file=sys.stderr)
+        for f in found:
+            print('  - ' + f, file=sys.stderr)
+        sys.exit(1)
+    for target, text in zip(TARGETS, texts):
+        same = target.exists() and target.read_text() == text
+        if check_only:
+            print(f'ok: {target} would be {"unchanged" if same else "updated"}')
+        elif not same:
+            target.write_text(text)
+            print(f'wrote {target} ({len(text.splitlines())} lines)')
+        else:
+            print(f'unchanged {target}')
 
 
 if __name__ == '__main__':
