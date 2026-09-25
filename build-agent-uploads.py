@@ -17,10 +17,11 @@ It refuses to write anything if the output still depends on something
 only the student app has. uploads.js keeps growing ties to Semester HQ
 (a local vendor/ copy of heic2any, the diag logger in diagnostics.js),
 and a blind copy would break photo uploads in both OSes. So the output is
-checked for: vendor/ paths neither OS hosts, any top-level name from the
+checked for: vendor/ files that OS doesn't have, script addresses its
+security policy blocks, any top-level name from the
 student app's other js/ files that the prelude doesn't supply, and a
 syntax error (node --check). Anything it finds is listed; fix it here
-(a BODY_FIXES entry or a prelude stand-in), then run it again.
+(HEIC_SRC, or a prelude stand-in), then run it again.
 """
 import re
 import subprocess
@@ -72,10 +73,15 @@ NAIVE_TOAST = "function toast(msg) { if (typeof showToast === 'function') showTo
 GUARDED_TOAST = "if (typeof toast !== 'function') window.toast = function (msg) { if (typeof showToast === 'function') showToast(msg); else console.info(msg); };"
 
 
-# Paths only the student app hosts, swapped for what both OSes load today.
-BODY_FIXES = [
-    ("'vendor/heic2any/heic2any.min.js'", "'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js'"),
-]
+# Where each OS loads heic2any from. Nyla OS has no Content Security Policy and
+# uses the pinned CDN build. The Business OS serves its own vendored copy
+# (semester-hq-dashboard/vendor/VENDOR.md) because its CSP names no CDN, so a
+# CDN address there is blocked and iPhone photos stop converting.
+HEIC_SRC = {
+    0: "'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js';",
+    1: "'/vendor/heic2any/heic2any.min.js';   // served from this site, see vendor/VENDOR.md",
+}
+STUDENT_HEIC_SRC = re.compile(r"(const HEIC2ANY_SRC = )'[^']*';[^\n]*")
 # Names the prelude above supplies, so the body may use them.
 PRELUDE_PROVIDES = {'toast', 'diag', 'loadScriptOnce', 'withTimeout', 'extractPdfText', 'extractPdfPageImages', 'fileExt', 'showToast'}
 
@@ -100,8 +106,16 @@ def code_only(js):
 
 def problems_in(out, host):
     found = []
-    if 'vendor/' in out:
-        found.append("a vendor/ path neither OS hosts: " + ', '.join(sorted(set(re.findall(r"vendor/[\w./-]+", out)))))
+    # Any vendor/ file it loads must exist in that OS's own folder.
+    missing_files = sorted({v for v in re.findall(r"/?vendor/[\w./-]+", out) if not (TARGETS[host].parent / v.lstrip('/')).exists()})
+    if missing_files:
+        found.append('vendor/ files this OS does not have: ' + ', '.join(missing_files))
+    # Any other site it loads scripts from must be allowed by that OS's CSP.
+    allowed = SCRIPT_SRC.get(host)
+    if allowed is not None:
+        blocked = sorted({u for u in re.findall(r"https://[\w.-]+", out) if u not in allowed and u in scripts_loaded(out)})
+        if blocked:
+            found.append("script addresses this OS's security policy blocks: " + ', '.join(blocked))
     code = code_only(out)
     declared = set(re.findall(r'(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)', code))
     used = set(re.findall(r'(?<![\w$.])([A-Za-z_$][\w$]*)\b', code))
@@ -141,6 +155,21 @@ def top_level(js):
 HOST_NAMES = {0: 'Nyla OS', 1: 'the Business OS'}
 
 
+def csp_script_origins(path):
+    m = re.search(r"'script-src':\s*\[([^\]]*)\]", path.read_text()) if path.exists() else None
+    return set(re.findall(r"'(https://[^']+)'", m.group(1))) if m else set()
+
+
+# Script origins each OS's CSP allows (None = no CSP). The Business OS's lives in its Worker.
+SCRIPT_SRC = {0: None, 1: csp_script_origins(HERE / 'semester-hq-dashboard' / 'worker' / 'gate-lib.js')}
+
+
+def scripts_loaded(out):
+    """Origins of the script URLs the file loads: *_SRC constants and loadScriptOnce('...') calls."""
+    urls = re.findall(r"_SRC\s*=\s*'(https://[^']+)'", out) + re.findall(r"loadScriptOnce\(\s*'(https://[^']+)'", out)
+    return {re.match(r'https://[\w.-]+', u).group(0) for u in urls}
+
+
 def clashes_with_host(out, i):
     mine = top_level(out)
     found = []
@@ -177,12 +206,12 @@ def main():
         ('so a student couldn\'t even\n   select the Word syllabus they had', 'so you couldn\'t even\n   select the Word document you had'),
     ]:
         body = body.replace(old, new_text)
-    for old, new_text in BODY_FIXES:
-        body = body.replace(old, new_text)
+    if not STUDENT_HEIC_SRC.search(body):
+        sys.exit('HEIC2ANY_SRC is no longer a plain string in uploads.js; update HEIC_SRC handling here.')
     out = PRELUDE + body + '\n'
     texts = []
     for i, target in enumerate(TARGETS):
-        text = out
+        text = STUDENT_HEIC_SRC.sub(lambda m: m.group(1) + HEIC_SRC[i], out)
         if i == 0:
             # Nyla OS runs its own code as modern JS (data-presets="react"), where its
             # `const toast` and a global `function toast` here can't both exist. So

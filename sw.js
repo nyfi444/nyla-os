@@ -7,7 +7,7 @@
 
    Bump VERSION when you change the app, so old caches are cleared.
 ──────────────────────────────────────────────────────────────── */
-const VERSION = 'nyla-os-2026-09-24-2';
+const VERSION = 'nyla-os-2026-09-24-3';
 const APP_SHELL = [
   './nyla-os.html', './agent-uploads.js', './manifest.webmanifest', './pwa.js',
   './js/energy.jsx', './js/brief.jsx', './js/memories.jsx', './js/agent-edit.jsx', './js/agent-hub.jsx', './js/agent-prompts.jsx', './js/capture.jsx',
