@@ -29,7 +29,10 @@
 ──────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
-  var BABEL_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js';
+  // "?sri=1" gives this request its own place in the service worker's cache. The old page loaded
+  // the same file without a cross-origin check, so the copy cached under the bare address is one
+  // the browser would refuse here, and the first open after the update would fail.
+  var BABEL_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js?sri=1';
   var BABEL_SRI = 'sha384-x/ilTFv/u/eu6YSmkFDZl5V5Mm/pkxxcVv2cVJOrr1J0rvILhMvRBCy6yA75wYBj';
   // Part of every fingerprint: change it when the Babel version or the
   // settings below change, so nothing translated the old way is reused.
