@@ -45,7 +45,8 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+  <!-- Babel is no longer loaded up front: js/boot.js keeps the translated app on the device and
+       fetches Babel only when a file has changed since the last open. -->
   <!-- Reads whatever you attach to an agent chat: Word, Excel, PowerPoint,
        OpenDocument, RTF, web pages, text, and photos. Generated from
        Semester HQ's reader by build-agent-uploads.py. -->
@@ -171,30 +172,30 @@
 <div id="root"></div>
 <!-- Feature modules. They load BEFORE the main script below, so each keeps its
      top level free of app globals; see the note at the top of each file. -->
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/energy.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/brief.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/memories.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/agent-edit.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/agent-hub.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/agent-prompts.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/capture.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/daily.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/weekly-review.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/smart-add.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/people.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/patterns.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/cosmic-timing.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/close-day.jsx"></script>
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/safety-panel.jsx"></script>
-<!-- data-presets="react" (all eight babel tags): Babel only turns JSX into JS and leaves the rest
-     as modern JavaScript, which every browser she uses runs as is. The default also rewrote the whole
-     app to old-style JS with a 3 MB source map on every open: about 4.7 s of the load, measured Sept 23.
-     data-plugins replaces Babel's default plugin list, whose object-rest-spread step writes the same
-     helper names (_excluded) at the top of several files; with native const those collide and stop
-     the app loading. flow-strip-types is the harmless one of the three defaults, kept so a plugin
-     list is present. With native const/let, a top-level name is shared across these scripts but is
-     not a window property, and two scripts may not declare the same top-level name. -->
-<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types">
+<script type="text/nyla-jsx" src="js/energy.jsx"></script>
+<script type="text/nyla-jsx" src="js/brief.jsx"></script>
+<script type="text/nyla-jsx" src="js/memories.jsx"></script>
+<script type="text/nyla-jsx" src="js/agent-edit.jsx"></script>
+<script type="text/nyla-jsx" src="js/agent-hub.jsx"></script>
+<script type="text/nyla-jsx" src="js/agent-prompts.jsx"></script>
+<script type="text/nyla-jsx" src="js/capture.jsx"></script>
+<script type="text/nyla-jsx" src="js/daily.jsx"></script>
+<script type="text/nyla-jsx" src="js/weekly-review.jsx"></script>
+<script type="text/nyla-jsx" src="js/smart-add.jsx"></script>
+<script type="text/nyla-jsx" src="js/people.jsx"></script>
+<script type="text/nyla-jsx" src="js/patterns.jsx"></script>
+<script type="text/nyla-jsx" src="js/cosmic-timing.jsx"></script>
+<script type="text/nyla-jsx" src="js/close-day.jsx"></script>
+<script type="text/nyla-jsx" src="js/safety-panel.jsx"></script>
+<!-- Every text/nyla-jsx script (the modules above and the main script below) is run by js/boot.js:
+     translated once with Babel (preset react only, plus flow-strip-types, so the rest stays modern
+     JavaScript), saved on the device, and reused on every later open until the file changes. Babel's
+     default preset list rewrote the whole app to old-style JS with a 3 MB source map on every open
+     (about 4.7 s, measured Sept 23), and its default plugin list writes the same helper names
+     (_excluded) at the top of several files, which collide with native const. With native const/let,
+     a top-level name is shared across these scripts but is not a window property, and two scripts
+     may not declare the same top-level name. -->
+<script type="text/nyla-jsx">
 const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
 
 
@@ -3219,7 +3220,7 @@ const TrashPanel = ({ type, onRestoreBusiness, onRestore }) => {
     refresh();
   };
   const handleDelete = id => { permanentDelete(id); refresh(); };
-  const typeLabel = { task:'Task', goal:'Goal', business:'Business', notebook_page:'Note', idea:'Idea', calendar_event:'Calendar Event', course:'Course', assignment:'Assignment', habit:'Habit', bucket_item:'Bucket List Item', project:'Project', social_account:'Social Account', social_content:'Content Item', book:'Book' };
+  const typeLabel = { Person:'Person', task:'Task', goal:'Goal', business:'Business', notebook_page:'Note', idea:'Idea', calendar_event:'Calendar Event', course:'Course', assignment:'Assignment', habit:'Habit', bucket_item:'Bucket List Item', project:'Project', social_account:'Social Account', social_content:'Content Item', book:'Book' };
   return (
     <div className="fade-in" style={{ maxWidth:620 }}>
       <PageTitle>Recently Deleted</PageTitle>
@@ -12391,6 +12392,8 @@ const App = () => {
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
+<!-- Runs every text/nyla-jsx script above, in order, from the saved translation when nothing changed. -->
+<script src="js/boot.js"></script>
 <script src="pwa.js"></script>
 </body>
 </html>
