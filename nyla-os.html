@@ -605,8 +605,10 @@ localStorage.setItem=function(key,value){
   // Writing back the very same value is not an edit. Pages do that as they open, and counting it
   // as one is what used to put a device "in conflict" when nothing on it had changed.
   const changed=tracked&&localStorage.getItem(key)!==String(value);
+  // A write that could not land throws, as it always did, so a page that checks can tell;
+  // the difference is that she is told first.
   try{ _rawLS(key,value); }
-  catch(e){ if(!_storageFull(key,value,e)) return; }
+  catch(e){ if(!_storageFull(key,value,e)) throw e; }
   if(changed){
     _noteKeyTime(key);
     _setDirty(true);
@@ -2712,6 +2714,9 @@ const FocusMode = () => {
   const [endAt, setEndAt] = useState(null);
   const [round, setRound] = useState(0);
   const [tasks, setTasks] = useState(()=>JSON.parse(localStorage.getItem('nylaos_tasks')||'[]'));
+  // Smart add, Close the Day and the Weekly Review add and move tasks from outside this page. Re-read
+  // the list when they do, so a check-off here never saves an older copy over their changes.
+  useEffect(()=>{ const f=()=>setTasks(JSON.parse(localStorage.getItem('nylaos_tasks')||'[]')); window.addEventListener('nyla-tasks-changed', f); return ()=>window.removeEventListener('nyla-tasks-changed', f); },[]);
   const [taskId, setTaskId] = useState(null);
   const [sessions, setSessions] = useState(()=>JSON.parse(localStorage.getItem('nylaos_focus_sessions')||'[]'));
   const [sound, setSound] = useState(true);
