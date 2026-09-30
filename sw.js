@@ -7,10 +7,10 @@
 
    Bump VERSION when you change the app, so old caches are cleared.
 ──────────────────────────────────────────────────────────────── */
-const VERSION = 'nyla-os-2026-09-25-1';
+const VERSION = 'nyla-os-2026-09-29-1';
 const APP_SHELL = [
   './nyla-os.html', './agent-uploads.js', './manifest.webmanifest', './pwa.js',
-  './js/energy.jsx', './js/brief.jsx', './js/memories.jsx', './js/agent-edit.jsx', './js/agent-hub.jsx', './js/agent-prompts.jsx', './js/capture.jsx', './js/nyla-pdf.js', './js/daily.jsx',
+  './js/energy.jsx', './js/brief.jsx', './js/memories.jsx', './js/agent-edit.jsx', './js/agent-hub.jsx', './js/agent-prompts.jsx', './js/capture.jsx', './js/nyla-pdf.js', './js/daily.jsx', './js/weekly-review.jsx', './js/smart-add.jsx', './js/smart-parse.js', './js/boot.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 const CDN_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'unpkg.com', 'cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'www.gstatic.com'];

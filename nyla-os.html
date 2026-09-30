@@ -51,6 +51,8 @@
        Semester HQ's reader by build-agent-uploads.py. -->
   <script src="agent-uploads.js"></script>
   <script src="js/nyla-pdf.js"></script>
+  <!-- Reads "dinner with mom friday 7pm" into a dated event; used by quick add. -->
+  <script src="js/smart-parse.js"></script>
   <!-- Firebase (cross-device sync) -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -172,6 +174,8 @@
 <script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/agent-prompts.jsx"></script>
 <script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/capture.jsx"></script>
 <script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/daily.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/weekly-review.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/smart-add.jsx"></script>
 <!-- data-presets="react" (all eight babel tags): Babel only turns JSX into JS and leaves the rest
      as modern JavaScript, which every browser she uses runs as is. The default also rewrote the whole
      app to old-style JS with a 3 MB source map on every open: about 4.7 s of the load, measured Sept 23.
@@ -1389,7 +1393,7 @@ const TAG_COLORS = {
 
 /* ── Nav ────────────────────────────────────────────────────────── */
 const NAV = [
-  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes','Brain Dump','Year in Review'] },
+  { id:'home',       label:'Home',       sub:['Overview','Quick Notes','Focus Mode','Voice Notes','Brain Dump','Weekly Review','Year in Review'] },
   { id:'calendar',   label:'Calendar',   sub:['Monthly','Weekly','Daily','Agenda','Quarterly','Yearly','Event Planner','Recently Deleted'] },
   { id:'tasks',      label:'Tasks',      sub:['Today','Upcoming','All Tasks','To Do List','Eisenhower','Projects','Completed','Recently Deleted'] },
   { id:'lists',      label:'Lists & Habits', sub:['Habits','Shopping List','Bucket List','Bored Bucket','Pros & Cons','Recently Deleted'] },
@@ -11438,7 +11442,7 @@ const SecondBrainPanel = ({ sub }) => {
 /* ── Router ─────────────────────────────────────────────────────── */
 const MainContent = ({ navId, sub, rev=0 }) => (
   <div key={`${navId}__${sub}${navId==='notebook'||navId==='agents'?'':`__${rev}`}`} className="fade-in" style={navId==='notebook'?{ height:'100%' }:undefined}>
-    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:sub==='Year in Review'?<YearInReview/>:<FocusMode/>)}
+    {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:sub==='Weekly Review'?<WeeklyReview/>:sub==='Year in Review'?<YearInReview/>:<FocusMode/>)}
     {navId==='calendar'   && (sub==='Event Planner'?<EventPlanner/>:<CalendarPanel sub={sub} />)}
     {navId==='tasks'      && <TasksPanel sub={sub} />}
     {navId==='lists'      && (sub==='Pros & Cons'?<ProsConsMaker/>:sub==='Shopping List'?<SimpleChecklist storageKey="nylaos_shopping_list" title="Shopping List" placeholder="Add something to pick up…" />:sub==='Bucket List'?<BucketList/>:sub==='Bored Bucket'?<BoredBucket/>:sub==='Recently Deleted'?<TrashPanel type={['habit','bucket_item']} />:<HabitTracker/>)}
@@ -12078,6 +12082,7 @@ const QuickAdd = ({ variant='bar' }) => {
   const isFab = variant==='fab';
   const panel = open && (
     <div className="fade-in" style={{ position:'absolute', ...(isFab ? { bottom:62, right:0 } : { top:44, right:0 }), width: mode==='ai'?340:290, background:C.cream, border:`0.5px solid ${C.border}`, borderRadius:18, boxShadow:'0 18px 50px rgba(0,0,0,.18)', padding:8, zIndex:400 }}>
+      {!mode && typeof SmartAddBox==='function' && <SmartAddBox onDone={close}/>}
       {!mode ? actions.map(a=>(
         <button key={a.key} onClick={()=>setMode(a.key)} style={{ width:'100%', display:'flex', alignItems:'center', gap:11, padding:'9px 10px', borderRadius:12, border:'none', background:'transparent', cursor:'pointer', textAlign:'left' }}
           onMouseEnter={e=>e.currentTarget.style.background=`${C.pink}70`} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
