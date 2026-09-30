@@ -30,9 +30,10 @@
 (function () {
   'use strict';
   var BABEL_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js';
+  var BABEL_SRI = 'sha384-x/ilTFv/u/eu6YSmkFDZl5V5Mm/pkxxcVv2cVJOrr1J0rvILhMvRBCy6yA75wYBj';
   // Part of every fingerprint: change it when the Babel version or the
   // settings below change, so nothing translated the old way is reused.
-  var RECIPE = 'babel-7.26.4|react|flow-strip-types|1';
+  var RECIPE = 'babel-7.26.4|react|flow-strip-types|1'; // change BABEL_SRC and BABEL_SRI with it
   var DB_NAME = 'nylaos_boot', STORE = 'compiled';
   var t0 = performance.now();
   var report = window.__boot = { ms: null, reused: 0, translated: 0, babelLoaded: false, skipped: [], error: '' };
@@ -118,6 +119,10 @@
     babelReady = new Promise(function (resolve, reject) {
       var s = document.createElement('script');
       s.src = BABEL_SRC;
+      // The browser refuses the file unless it is byte for byte this one. What Babel writes is
+      // kept and reused for a long time, so a tampered copy must never get to write it.
+      s.integrity = BABEL_SRI;
+      s.crossOrigin = 'anonymous';
       s.onload = function () { report.babelLoaded = true; resolve(); };
       s.onerror = function () { reject(new Error('Babel could not be loaded')); };
       document.head.appendChild(s);
