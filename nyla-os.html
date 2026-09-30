@@ -53,6 +53,9 @@
   <script src="js/nyla-pdf.js"></script>
   <!-- Reads "dinner with mom friday 7pm" into a dated event; used by quick add. -->
   <script src="js/smart-parse.js"></script>
+  <!-- Sync that merges two devices instead of choosing one, and the safety copies behind it. -->
+  <script src="js/sync-merge.js"></script>
+  <script src="js/safety.js"></script>
   <!-- The sums behind Cosmic > Timing: moon phases, stations, ingresses, best days. -->
   <script src="js/cosmic-timing-core.js"></script>
   <!-- Firebase (cross-device sync) -->
@@ -182,6 +185,7 @@
 <script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/patterns.jsx"></script>
 <script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/cosmic-timing.jsx"></script>
 <script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/close-day.jsx"></script>
+<script type="text/babel" data-presets="react" data-plugins="transform-flow-strip-types" src="js/safety-panel.jsx"></script>
 <!-- data-presets="react" (all eight babel tags): Babel only turns JSX into JS and leaves the rest
      as modern JavaScript, which every browser she uses runs as is. The default also rewrote the whole
      app to old-style JS with a 3 MB source map on every open: about 4.7 s of the load, measured Sept 23.
@@ -319,6 +323,28 @@ let _dirty = localStorage.getItem('nylaos_dirty_flag')==='true';
 const _setDirty = v => { _dirty=v; _rawLS('nylaos_dirty_flag', v?'true':'false'); };
 let _pendingConflict=null; // {snapshot, savedAt, user} — set instead of auto-applying when local is dirty
 
+/* ── Sync that merges (Sept 29, 2026) ────────────────────────────────
+   Two devices used to mean choosing one and losing the other's changes.
+   Now they are merged record by record (js/sync-merge.js), against the
+   last state both agreed on, which js/safety.js keeps in IndexedDB. The
+   version that loses a true clash is kept under Backup & Restore.
+   The old Conflict choice is still here, only as the fallback for a
+   browser where those two files could not load. */
+const _rawRemove = localStorage.removeItem.bind(localStorage);
+const _SYNC_LOCAL = { nylaos_cloud_ts:1, nylaos_dirty_flag:1, nylaos_auto_bak:1, nylaos_moodboard:1 };
+const _canMerge = () => !!(window.nylaSync && window.nylaSafety);
+// When each key last changed on this device. Device-local (the name does not start with
+// nylaos_, so it never syncs as data); a copy rides along with each upload so the other
+// device can tell which of two edits is the newer.
+let _keyTimes = (()=>{ try{ const v=JSON.parse(localStorage.getItem('nyla_sync_times')||'{}'); return v&&typeof v==='object'&&!Array.isArray(v)?v:{}; }catch(e){ return {}; } })();
+let _keyTimesTimer=null;
+const _noteKeyTime = k => { _keyTimes[k]=Date.now(); if(_keyTimesTimer) return; _keyTimesTimer=setTimeout(()=>{ _keyTimesTimer=null; try{ _rawLS('nyla_sync_times',JSON.stringify(_keyTimes)); }catch(e){} },800); };
+let _lastInputAt=0, _merging=false, _silentReload=false;
+['keydown','pointerdown','input'].forEach(ev=>window.addEventListener(ev,()=>{ _lastInputAt=Date.now(); },{capture:true,passive:true}));
+// Runs fn once she has stopped typing or tapping for a moment, so a merge never reloads the page mid-sentence.
+const _whenQuiet = fn => { const wait=()=>{ const idle=Date.now()-_lastInputAt; if(idle>=2500) fn(); else setTimeout(wait,2600-idle); }; wait(); };
+const _sameMap = (a,b) => { const ka=Object.keys(a), kb=Object.keys(b); return ka.length===kb.length && ka.every(k=>a[k]===b[k]); };
+
 const useSyncStatus=()=>{
   const [s,setS]=React.useState(_syncState);
   React.useEffect(()=>{_syncSubs.add(setS);return()=>_syncSubs.delete(setS);},[]);
@@ -341,10 +367,13 @@ async function _cloudLoad(force){
   try{
     const doc=await _fbDb.collection('nylaos').doc(_fbUser.uid).get();
     if(doc.exists){
-      const {snapshot,savedAt}=doc.data();
+      const d=doc.data();
+      const {snapshot,savedAt}=d;
       const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
+      if(_canMerge() && (snapshot||d.snapshotGz) && (force||savedAt>localTs)){ _mergeFromCloud(d,_fbUser); return; }
       if(snapshot&&savedAt>localTs){ _maybeApplyOrConflict(snapshot,savedAt,_fbUser,force); return; }
     }
+    if(_dirty){ cloudSave(); return; }
     _setSyncState({status:'synced',user:_fbUser});
   }catch(e){console.warn('Cloud load:',e);_setSyncState({status:'error',user:_fbUser});}
 }
@@ -433,32 +462,107 @@ function _buildSyncSnapshot(){
   return snap;
 }
 
+// What goes up: the plain text while it fits (every version of the app can read that), squeezed
+// with gzip once it no longer does. Notebook text squeezes to a fifth or less, which moves the
+// wall from about 0.9 MB of data to several.
+async function _packSnapshot(snap){
+  const snapshot=JSON.stringify(snap);
+  const room=_FIRESTORE_DOC_LIMIT-JSON.stringify(_keyTimes).length-2000;
+  const size=new Blob([snapshot]).size;
+  if(size<=room) return {snapshot};
+  if(window.nylaSafety&&nylaSafety.canGzip()){
+    const gz=await nylaSafety.gzip(snapshot);
+    if(gz.length<=room) return {snapshotGz:gz};
+  }
+  const e=new Error('oversize'); e.code='oversize'; e.size=size; throw e;
+}
+async function _readCloudDoc(d){
+  let raw=d&&d.snapshot;
+  if(!raw&&d&&d.snapshotGz&&window.nylaSafety) raw=await nylaSafety.gunzip(d.snapshotGz);
+  if(!raw) return null;
+  const map=JSON.parse(raw);
+  Object.keys(map).forEach(k=>{ if(typeof map[k]!=='string') delete map[k]; });
+  return { map, savedAt:d.savedAt, times:(d.times&&typeof d.times==='object')?d.times:{} };
+}
+function _applyKey(k,v){
+  // Brand mood images never upload, so what comes down has none: keep this device's own.
+  if(k.startsWith('nylaos_brand_')){
+    try{ const incoming=JSON.parse(v); const local=JSON.parse(localStorage.getItem(k)||'{}'); _rawLS(k,JSON.stringify({...incoming,moodImages:(local&&local.moodImages)||[]})); return; }catch(e){}
+  }
+  _rawLS(k,v);
+}
+
+// Brings the other device's changes in beside this device's own. Nothing is written until the
+// whole answer is known, and then it is written and the page reloaded in one go, so no open page
+// can write its older copy over what just arrived.
+async function _mergeFromCloud(d,user){
+  if(_merging||_reloadPending) return;
+  _merging=true;
+  let later=false;
+  _setSyncState({status:'syncing',user});
+  try{
+    const remote=await _readCloudDoc(d);
+    if(!remote){ _setSyncState({status:'synced',user}); return; }
+    const base=await nylaSafety.getBase();
+    const opts={localTimes:_keyTimes,remoteTimes:remote.times};
+    const first=nylaSync.merge(_buildSyncSnapshot(),remote.map,base,opts);
+    const finish=async()=>{
+      const r=nylaSync.merge(_buildSyncSnapshot(),remote.map,base,opts);   // again, from what is stored this instant
+      const keys=Object.keys(r.toLocal);
+      keys.forEach(k=>{ const v=r.toLocal[k]; if(v===undefined) _rawRemove(k); else _applyKey(k,v); });
+      _rawLS('nylaos_cloud_ts',String(remote.savedAt));
+      _pendingConflict=null;
+      _setDirty(r.toRemote);
+      if(keys.length){
+        // The page reloads at once; what this device adds goes up right after it reopens.
+        _reloadPending=true; _silentReload=true;
+        try{ sessionStorage.setItem('nyla_merged',JSON.stringify({...r.stats,kept:r.kept.length})); }catch(e){}
+        try{ await nylaSafety.setBase(remote.map); await nylaSafety.keep(r.kept,'sync'); }catch(e){}
+        window.location.reload();
+        return;
+      }
+      await nylaSafety.setBase(remote.map);
+      await nylaSafety.keep(r.kept,'sync');
+      _merging=false;
+      if(r.toRemote) await cloudSave(); else _setSyncState({status:'synced',user});
+    };
+    if(Object.keys(first.toLocal).length){
+      later=true;
+      _whenQuiet(()=>{ finish().catch(e=>{ console.warn('Sync merge:',e); _setSyncState({status:'error',user}); }).finally(()=>{ _merging=false; }); });
+    } else await finish();
+  }catch(e){
+    console.warn('Sync merge:',e);
+    _setSyncState({status:'error',user});
+  }finally{ if(!later) _merging=false; }
+}
+
 async function cloudSave(){
   if(!_fbUser||!_fbDb) return;
   // Never push while a conflict is unresolved — the local copy is known-stale relative to
   // the cloud at this point, so an auto-save here would silently bury the other device's
   // changes under stale data the instant this device makes any further edit.
   if(_pendingConflict){ _setSyncState({status:'conflict',user:_fbUser}); return; }
+  if(_merging||_reloadPending) return;
+  // Offline: the change is safe on this device and goes up when the connection is back.
+  if(!navigator.onLine){ _setSyncState({status:'idle',user:_fbUser}); return; }
   _setSyncState({status:'syncing',user:_fbUser});
   try{
-    const snap=_buildSyncSnapshot();
-    const snapshot=JSON.stringify(snap);
-    const sizeBytes=new Blob([snapshot]).size;
-    if(sizeBytes>_FIRESTORE_DOC_LIMIT){
-      _setSyncState({status:'error',user:_fbUser});
-      const reason='oversize';
-      if(_lastSyncFailReason!==reason && typeof toast==='function'){
-        toast(`Sync failed — your data (${(sizeBytes/1024/1024).toFixed(1)}MB) is too large for cloud sync, even with images excluded. Try trimming Notebook pages or Tasks.`,'error',6000);
-      }
-      _lastSyncFailReason=reason;
-      return;
+    const ref=_fbDb.collection('nylaos').doc(_fbUser.uid);
+    if(_canMerge()){
+      // Look before writing. If another device has saved since this one last synced, merge with
+      // it first: an upload must never cover changes this device has not seen.
+      const cur=await ref.get();
+      const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
+      if(cur.exists){ const c=cur.data(); if(c.savedAt>localTs&&(c.snapshot||c.snapshotGz)){ await _mergeFromCloud(c,_fbUser); return; } }
     }
+    const snap=_buildSyncSnapshot();
+    const packed=await _packSnapshot(snap);
     const savedAt=Date.now();
-    await _fbDb.collection('nylaos').doc(_fbUser.uid).set({
-      snapshot,savedAt,email:_fbUser.email||''
-    });
+    await ref.set({ ...packed, savedAt, email:_fbUser.email||'', times:_keyTimes, v:2 });
     _rawLS('nylaos_cloud_ts',String(savedAt));
-    _setDirty(false);
+    if(_canMerge()) await nylaSafety.setBase(snap);
+    // Only "saved" if nothing was typed while it was going up; otherwise the next save is already queued.
+    if(_sameMap(_buildSyncSnapshot(),snap)) _setDirty(false);
     _setSyncState({status:'synced',user:_fbUser});
     _lastSyncFailReason=null;
     if(typeof toast==='function') toast('Synced to cloud','sync',2000);
@@ -467,19 +571,43 @@ async function cloudSave(){
     _setSyncState({status:'error',user:_fbUser});
     const reason=e&&e.code?e.code:'unknown';
     if(_lastSyncFailReason!==reason && typeof toast==='function'){
-      toast(e&&e.code==='permission-denied' ? 'Sync failed — signed out or not authorized. Try signing in again.'
+      toast(e&&e.code==='oversize' ? `Sync paused: your data (${((e.size||0)/1024/1024).toFixed(1)} MB) is too large for cloud sync even when squeezed. Settings, then Backup & Restore, shows what is taking the room.`
+        : e&&e.code==='permission-denied' ? 'Sync failed — signed out or not authorized. Try signing in again.'
         : e&&e.code==='resource-exhausted' ? 'Sync failed — your data is too large for cloud sync.'
-        : `Sync failed${e&&e.message?': '+e.message:''}`, 'error', 5000);
+        : `Sync failed${e&&e.message?': '+e.message:''}`, 'error', 6000);
     }
     _lastSyncFailReason=reason;
   }
+}
+// Back online with changes waiting: send them.
+window.addEventListener('online',()=>{ if(_dirty&&_fbUser) cloudSave(); });
+
+// This device's storage is small (about 5 MB) and a full one used to fail without a word.
+let _fullWarned=0;
+function _storageFull(key,value,err){
+  const isQuota=err&&(err.name==='QuotaExceededError'||err.name==='NS_ERROR_DOM_QUOTA_REACHED'||err.code===22||err.code===1014);
+  if(!isQuota) throw err;
+  // The old automatic backup was a second full copy in this same space. Copies live in IndexedDB
+  // now (js/safety.js), so it can go, and the write gets another try.
+  try{ if(localStorage.getItem('nylaos_auto_bak')!==null){ _rawRemove('nylaos_auto_bak'); _rawLS(key,value); return true; } }catch(e2){}
+  if(Date.now()-_fullWarned>20000&&typeof toast==='function'){
+    _fullWarned=Date.now();
+    toast('This device is out of room, so that last change was not saved. Open Settings, then Backup & Restore, to see what is taking the space.','error',10000);
+  }
+  return false;
 }
 
 // Intercept all localStorage writes → auto-sync 2.5s after last change
 let _nbFileTimer=null, _vaultTimer=null;
 localStorage.setItem=function(key,value){
-  _rawLS(key,value);
-  if(key&&key.startsWith('nylaos_')&&key!=='nylaos_cloud_ts'&&key!=='nylaos_dirty_flag'){
+  const tracked=!!key&&key.startsWith('nylaos_')&&!_SYNC_LOCAL[key];
+  // Writing back the very same value is not an edit. Pages do that as they open, and counting it
+  // as one is what used to put a device "in conflict" when nothing on it had changed.
+  const changed=tracked&&localStorage.getItem(key)!==String(value);
+  try{ _rawLS(key,value); }
+  catch(e){ if(!_storageFull(key,value,e)) return; }
+  if(changed){
+    _noteKeyTime(key);
     _setDirty(true);
     if(_fbUser){
       if(_syncTimer) clearTimeout(_syncTimer);
@@ -496,6 +624,19 @@ localStorage.setItem=function(key,value){
   if(key==='nylaos_nb_pages'||key==='nylaos_nb_folders'||key==='nylaos_ideas'||key==='nylaos_goals'){
     if(_vaultTimer) clearTimeout(_vaultTimer);
     _vaultTimer=setTimeout(()=>{ if(window.Vault&&window.Vault.linked()) window.Vault.syncAll({quiet:true}); },6000);
+  }
+};
+// Removing a key is a change too, and has to reach the other device.
+localStorage.removeItem=function(key){
+  const had=!!key&&key.startsWith('nylaos_')&&!_SYNC_LOCAL[key]&&localStorage.getItem(key)!==null;
+  _rawRemove(key);
+  if(had){
+    _noteKeyTime(key);
+    _setDirty(true);
+    if(_fbUser){
+      if(_syncTimer) clearTimeout(_syncTimer);
+      _syncTimer=setTimeout(cloudSave,2500);
+    }
   }
 };
 
@@ -1207,9 +1348,15 @@ let _cloudListener=null;
           if(doc.metadata.hasPendingWrites) return; // ignore our own in-flight writes
           const wasInitialAttach=_isInitialAttach; _isInitialAttach=false;
           if(!doc.exists){_setSyncState({status:'synced',user});return;}
-          const {snapshot,savedAt}=doc.data();
+          const d=doc.data();
+          const {snapshot,savedAt}=d;
           const localTs=parseInt(localStorage.getItem('nylaos_cloud_ts')||'0');
-          if(snapshot&&savedAt>localTs){
+          if(_canMerge()&&(snapshot||d.snapshotGz)&&savedAt>localTs){
+            _mergeFromCloud(d,user);
+          } else if(_canMerge()&&_dirty){
+            // Changes made here that never finished going up (the tab was closed, or it was offline).
+            cloudSave();
+          } else if(snapshot&&savedAt>localTs){
             // Force-apply on the initial attach (first sign-in / fresh session load) so signing
             // in still pulls your cloud data immediately — UNLESS this device already had unsynced
             // edits when the page loaded (_dirty persists across refreshes). A plain page refresh
@@ -1236,14 +1383,18 @@ let _cloudListener=null;
 (function(){
   const wasDirtyOnBoot = _dirty;
   setTimeout(()=>{
-    if(wasDirtyOnBoot && typeof toast==='function'){
+    let merged=null;
+    try{ merged=JSON.parse(sessionStorage.getItem('nyla_merged')||'null'); sessionStorage.removeItem('nyla_merged'); }catch(e){}
+    if(merged && typeof toast==='function'){
+      toast(merged.kept ? `Brought in changes from your other device ✦ ${merged.kept} older version${merged.kept===1?'':'s'} kept in Backup & Restore` : 'Brought in changes from your other device ✦','sync',merged.kept?6000:3200);
+    } else if(wasDirtyOnBoot && typeof toast==='function'){
       toast('Picked up where you left off — your edits are safely on this device','info',2600);
     }
     if(wasDirtyOnBoot && _fbUser){ cloudSave(); }
   }, 900);
   // Warn before closing/refreshing a tab with edits that haven't finished syncing to the cloud yet.
   window.addEventListener('beforeunload', e=>{
-    if(_dirty && _fbUser){
+    if(_dirty && _fbUser && !_silentReload){
       e.preventDefault();
       e.returnValue = '';
     }
@@ -1288,20 +1439,28 @@ const useIsMobile = () => {
     }
   });
 
-  // Auto-snapshot: copy every nylaos_ value before new code runs
+  // Auto-snapshot: how everything stood as the app opened. It goes to IndexedDB (js/safety.js):
+  // one copy for each of the last 14 days plus this session. It used to be a second full copy
+  // inside localStorage, written through the sync hook, which both halved the room and marked
+  // the device as "changed" on every open. Once the new copy is safely written, the old one
+  // (kept first as a copy of its own) is cleared.
   try {
-    const snap = {};
-    let hasData = false;
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith('nylaos_') && k !== 'nylaos_auto_bak') {
-        snap[k] = localStorage.getItem(k);
-        hasData = true;
+    if (window.nylaSafety) {
+      nylaSafety.snapshot(null, 'open').then(async ok => {
+        if (!ok) return;
+        const old = localStorage.getItem('nylaos_auto_bak');
+        if (old === null) return;
+        try { const data = JSON.parse(old); delete data.__savedAt; await nylaSafety.snapshot(data, 'last backup of the old kind', 'old-auto-backup'); } catch(e) {}
+        _rawRemove('nylaos_auto_bak');
+      }).catch(()=>{});
+    } else {
+      const snap = {};
+      let hasData = false;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('nylaos_') && k !== 'nylaos_auto_bak') { snap[k] = localStorage.getItem(k); hasData = true; }
       }
-    }
-    if (hasData) {
-      snap.__savedAt = new Date().toISOString();
-      localStorage.setItem('nylaos_auto_bak', JSON.stringify(snap));
+      if (hasData) { snap.__savedAt = new Date().toISOString(); _rawLS('nylaos_auto_bak', JSON.stringify(snap)); }
     }
   } catch(e) {}
 })();
@@ -1914,12 +2073,23 @@ const SyncButton = () => {
               <div style={{fontSize:13,color:C.text,fontWeight:500,marginBottom:16,wordBreak:'break-all'}}>{sync.user.email}</div>
               {!online && <div style={{fontSize:11.5,color:C.textMuted,marginBottom:12,lineHeight:1.5}}>You're offline — changes are saved on this device and will sync once you're back online.</div>}
               <div style={{fontSize:11,color:C.textMuted,marginBottom:12,lineHeight:1.5}}>Moodboard & Brand mood images stay on this device only — they don't sync (cloud storage has a size limit). Everything else does.</div>
-              <button onClick={()=>{_lastSyncFailReason=null;cloudSave();setOpen(false);}}
-                style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
-                  border:'none',cursor:'pointer',fontSize:13,marginBottom:6}}>↑ Push — save to cloud</button>
-              <button onClick={()=>{_cloudLoad(true);setOpen(false);}}
-                style={{width:'100%',padding:'9px',borderRadius:9,background:`${C.lavender}90`,color:C.rose,
-                  border:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:13,marginBottom:6}}>↓ Pull — load from cloud</button>
+              {_canMerge() ? (
+                <>
+                  <div style={{fontSize:11,color:C.textMuted,marginBottom:12,lineHeight:1.5}}>Your devices are merged, not overwritten. If two of them change the very same thing, the newer one wins and the other is kept in Settings, Backup & Restore.</div>
+                  <button onClick={()=>{_lastSyncFailReason=null;_cloudLoad(true);setOpen(false);}}
+                    style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
+                      border:'none',cursor:'pointer',fontSize:13,marginBottom:6}}>⟳ Sync now</button>
+                </>
+              ) : (
+                <>
+                  <button onClick={()=>{_lastSyncFailReason=null;cloudSave();setOpen(false);}}
+                    style={{width:'100%',padding:'9px',borderRadius:9,background:C.rose,color:'#fff',
+                      border:'none',cursor:'pointer',fontSize:13,marginBottom:6}}>↑ Push — save to cloud</button>
+                  <button onClick={()=>{_cloudLoad(true);setOpen(false);}}
+                    style={{width:'100%',padding:'9px',borderRadius:9,background:`${C.lavender}90`,color:C.rose,
+                      border:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:13,marginBottom:6}}>↓ Pull — load from cloud</button>
+                </>
+              )}
               <button onClick={()=>{fbSignOut();setOpen(false);}}
                 style={{width:'100%',padding:'9px',borderRadius:9,background:`${C.pink}80`,
                   color:C.rose,border:'none',cursor:'pointer',fontSize:13}}>Sign out</button>
@@ -10929,7 +11099,9 @@ const BackupPanel = () => {
     <div className="fade-in" style={{ maxWidth:500 }}>
       <PageTitle>Backup & Restore</PageTitle>
 
-      {/* Auto-backup status */}
+      {typeof SafetyPanel==='function' && <SafetyPanel/>}
+
+      {/* Auto-backup status (the old kind; shown only while one still exists) */}
       {autoBackupDate && (
         <Card style={{ marginBottom:14, background: C.lavLight }}>
           <SectionHeading>Auto-Backup</SectionHeading>

@@ -21,8 +21,11 @@
    translated code only, never leaves the device, and can be deleted at
    any time (the next open rebuilds it).
 
+   One feature file that can't be fetched or translated is skipped and
+   the rest of the app still opens; only the main script is essential.
+
    window.__boot records what happened, for checking load speed:
-   { ms, reused, translated, babelLoaded, error }.
+   { ms, reused, translated, babelLoaded, skipped, error }.
 ──────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
@@ -32,7 +35,7 @@
   var RECIPE = 'babel-7.26.4|react|flow-strip-types|1';
   var DB_NAME = 'nylaos_boot', STORE = 'compiled';
   var t0 = performance.now();
-  var report = window.__boot = { ms: null, reused: 0, translated: 0, babelLoaded: false, error: '' };
+  var report = window.__boot = { ms: null, reused: 0, translated: 0, babelLoaded: false, skipped: [], error: '' };
 
   var tags = Array.prototype.slice.call(document.querySelectorAll('script[type="text/nyla-jsx"]'));
   if (!tags.length) return;
@@ -99,7 +102,12 @@
     return fetch(src, { credentials: 'same-origin' }).then(function (res) {
       if (!res.ok) throw new Error(src + ' answered ' + res.status);
       return res.text();
-    }).then(function (code) { return { name: src, code: code }; });
+    }).then(function (code) { return { name: src, code: code }; },
+            function (err) { skip(src, err); return { name: src, code: null }; });
+  }
+  function skip(name, err) {
+    report.skipped.push(name);
+    console.error('[boot] left out ' + name + ':', err);
   }
 
   // ── Babel, only when something has to be translated ───────────────
@@ -164,7 +172,8 @@
     openDb().then(function (db) { dbRef = db; return readAll(db); }),
     Promise.all(tags.map(sourceOf)),
   ]).then(function (both) {
-    var saved = both[0], units = both[1];
+    var saved = both[0], units = both[1].filter(function (u) { return u.code != null; });
+    if (!units.some(function (u) { return u.name.indexOf('nyla-os.html#') === 0; })) throw new Error('the main script is missing');
     units.forEach(function (u) {
       u.key = fingerprint(u.code);
       var hit = saved[u.name];
@@ -174,10 +183,13 @@
     if (!stale.length) return units;
     return loadBabel().then(function () {
       var fresh = [];
-      stale.forEach(function (u) { u.out = translate(u); fresh.push({ name: u.name, key: u.key, code: u.out }); });
-      report.translated = stale.length;
+      stale.forEach(function (u) {
+        try { u.out = translate(u); fresh.push({ name: u.name, key: u.key, code: u.out }); }
+        catch (err) { if (u.name.indexOf('nyla-os.html#') === 0) throw err; skip(u.name, err); }
+      });
+      report.translated = fresh.length;
       writeAll(dbRef, fresh, units.map(function (u) { return u.name; }));
-      return units;
+      return units.filter(function (u) { return u.out != null; });
     });
   }).then(function (units) {
     report.reused = units.length - report.translated;
