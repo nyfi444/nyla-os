@@ -234,7 +234,7 @@ const BriefLink = ({ children, onClick, mobile, disabled }) => (
   }}>{children}</button>
 );
 const BriefSection = ({ label, action, first, children }) => (
-  <div style={{ marginTop: first ? 0 : 18 }}>
+  <div style={{ marginTop: first ? 0 : 14 }}>
     <HomeLabel action={action}><span style={{ fontSize: 11 }}>{label}</span></HomeLabel>
     {children}
   </div>
@@ -495,8 +495,8 @@ const BriefBody = () => {
 
   const pad = isMobile ? { padding: 'calc(16px * var(--nyla-space, 1))' } : {};
   return (
-    <Card style={{ marginBottom: 16, ...pad }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+    <Card style={{ marginBottom: 14, ...pad }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: isMobile ? 19 : 21, color: C.rose, lineHeight: 1.2 }}>Today's brief</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {!planText && <button onClick={makePlan} disabled={planning} style={{ ...brief_pillBtn(isMobile, true), opacity: planning ? 0.7 : 1, cursor: planning ? 'default' : 'pointer' }}>{planning ? 'Planning…' : 'Plan my day'}</button>}

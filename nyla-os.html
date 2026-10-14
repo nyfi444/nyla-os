@@ -109,7 +109,7 @@
     button:active:not(:disabled) { transform: scale(.97); }
     button { -webkit-tap-highlight-color: transparent; }
     .nyla-card { transition: box-shadow .2s ease, transform .2s ease, border-color .2s ease; }
-    .glass-chip { display:inline-flex; align-items:center; gap:6px; padding:6px 13px; border-radius:20px; font-size:12px;
+    .glass-chip { display:inline-flex; align-items:center; gap:5px; padding:5px 11px; border-radius:20px; font-size:11.5px;
       background: rgba(255,255,255,.55); border: .5px solid rgba(196,96,122,.18); color:#7a3a55; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
     html.dark .glass-chip { background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.12); color:#f0d8e4; }
     @keyframes orbFloat { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-18px,14px) scale(1.08); } }
@@ -1830,10 +1830,11 @@ const Ico = ({ d, size=22, active, stroke, fill='none' }) => (
     dangerouslySetInnerHTML={{ __html: d }} />
 );
 
+const _cardPad = (typeof window!=='undefined' && window.innerWidth < 700) ? 16 : 18;
 const Card = ({ children, style={}, onClick, className='' }) => (
   <div onClick={onClick} className={`nyla-card ${className}`} style={{
     background:C.card, border:`0.5px solid ${C.border}`,
-    borderRadius:18, padding:'calc(20px * var(--nyla-space, 1))',
+    borderRadius:18, padding:`calc(${_cardPad}px * var(--nyla-space, 1))`,
     boxShadow: _dk ? '0 1px 2px rgba(0,0,0,.25)' : `0 1px 2px rgba(64,24,40,.04), 0 8px 24px ${C.rose}0d`,
     ...style,
   }}>{children}</div>
@@ -1886,10 +1887,10 @@ const InlineInput = ({ value, onChange, placeholder, style={}, ...rest }) => (
 );
 
 const PageTitle = ({ children, subtitle, right }) => (
-  <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:12, marginBottom:20, flexWrap:'wrap' }}>
+  <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:12, marginBottom:14, flexWrap:'wrap' }}>
     <div>
-      <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:28, lineHeight:1.15, color:C.rose, letterSpacing:-.2 }}>{children}</div>
-      {subtitle && <div style={{ fontSize:12.5, color:C.textLight, marginTop:4 }}>{subtitle}</div>}
+      <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:25, lineHeight:1.15, color:C.rose, letterSpacing:-.2 }}>{children}</div>
+      {subtitle && <div style={{ fontSize:12.5, color:C.textLight, marginTop:3 }}>{subtitle}</div>}
     </div>
     {right}
   </div>
@@ -2230,7 +2231,7 @@ const TopBar = ({ activeNav, activeSub, scrolled }) => {
     </div>
   );
   return (
-    <div style={{ ...bar, height:56, display:'flex', alignItems:'center', gap:8, padding:'0 20px 0 28px' }}>
+    <div style={{ ...bar, height:52, display:'flex', alignItems:'center', gap:8, padding:'0 20px 0 28px' }}>
       <div style={{ minWidth:0, marginRight:'auto', display:'flex', alignItems:'baseline', gap:9, whiteSpace:'nowrap', overflow:'hidden' }}>
         <span style={{ fontFamily:"'DM Serif Display',serif", fontSize:19, color:C.rose }}>{item?.label}</span>
       </div>
@@ -2308,7 +2309,7 @@ const LeftSidebar = ({ activeNav, onNavSelect, activeSub, onSubSelect, labels, o
     const badge = !trash && navBadge(item.id, sub);
     return (
       <button onClick={()=>onSubSelect(sub)} {...hover(active)}
-        style={{ width:'100%', height:30, display:'flex', alignItems:'center', gap:8, padding:'0 10px 0 41px', borderRadius:9, border:'none', cursor:'pointer', textAlign:'left', flexShrink:0,
+        style={{ width:'100%', height:28, display:'flex', alignItems:'center', gap:8, padding:'0 10px 0 41px', borderRadius:9, border:'none', cursor:'pointer', textAlign:'left', flexShrink:0,
           background: active ? selBg : 'transparent', color: active ? C.rose : trash ? C.textMuted : C.textLight, fontSize:13, fontWeight: active?600:400, fontFamily:'inherit', transition:'background .12s' }}>
         <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</span>
         {badge && <span style={{ fontSize:11, fontVariantNumeric:'tabular-nums', flexShrink:0, color: badge.hot ? '#c65454' : C.textMuted, fontWeight: badge.hot?600:400 }}>{badge.n}</span>}
@@ -2321,7 +2322,7 @@ const LeftSidebar = ({ activeNav, onNavSelect, activeSub, onSubSelect, labels, o
     return (
       <>
         <button onClick={()=>onNavSelect(item.id)} aria-label={item.label} aria-current={active?'page':undefined} {...tip(item.label)} {...hover(active)}
-          style={{ width: labels?'100%':44, height: labels?34:44, borderRadius: labels?10:13, flexShrink:0, display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:11, padding: labels?'0 10px':0, cursor:'pointer', border:'none', fontFamily:'inherit',
+          style={{ width: labels?'100%':44, height: labels?32:44, borderRadius: labels?10:13, flexShrink:0, display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:11, padding: labels?'0 10px':0, cursor:'pointer', border:'none', fontFamily:'inherit',
             background: active && !open ? selBg : 'transparent', transition:'background .12s' }}>
           <Ico d={icons[item.id]} size={19} active={active} />
           {labels && <span style={{ flex:1, textAlign:'left', fontSize:13.5, fontWeight: active?600:500, color: active?C.rose:C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.label}</span>}
@@ -2423,17 +2424,17 @@ const QuickLinksBar = () => {
     boxShadow:`0 2px 8px ${C.rose}0f` };
   // Not editing: one row of app-style icons, like Safari's Favorites; it scrolls sideways when there are many.
   if (!editing) return (
-    <div style={{ marginBottom:20 }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+    <div style={{ marginBottom:14 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
         <div style={{ fontSize:13, color:C.textLight, fontWeight:600 }}>Favorites</div>
         <button onClick={()=>setEditing(true)} style={{ fontSize:13, color:C.rose, background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', padding:'4px 2px' }}>{links.length ? 'Edit' : '+ Add a link'}</button>
       </div>
       <div className="no-scrollbar" style={{ display:'flex', gap:4, overflowX:'auto', margin:'0 -6px', padding:'2px 0 4px', WebkitOverflowScrolling:'touch' }}>
         {links.map(link => (
           <a key={link.id} href={link.url} target="_blank" rel="noopener noreferrer" title={link.label} className="ql-tile"
-            style={{ width:70, flexShrink:0, display:'flex', flexDirection:'column', alignItems:'center', gap:6, textDecoration:'none', padding:'4px 0' }}>
-            <span className="ql-icon" style={{ width:50, height:50, borderRadius:14, display:'grid', placeItems:'center', background:C.card, border:`0.5px solid ${C.border}`, boxShadow:`0 1px 2px rgba(64,24,40,.05), 0 4px 12px ${C.rose}10` }}><QuickLinkIcon link={link} size={26}/></span>
-            <span style={{ fontSize:11, color:C.text, maxWidth:66, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{link.label}</span>
+            style={{ width:62, flexShrink:0, display:'flex', flexDirection:'column', alignItems:'center', gap:5, textDecoration:'none', padding:'4px 0' }}>
+            <span className="ql-icon" style={{ width:44, height:44, borderRadius:12, display:'grid', placeItems:'center', background:C.card, border:`0.5px solid ${C.border}`, boxShadow:`0 1px 2px rgba(64,24,40,.05), 0 4px 12px ${C.rose}10` }}><QuickLinkIcon link={link} size={23}/></span>
+            <span style={{ fontSize:10.5, color:C.text, maxWidth:60, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{link.label}</span>
           </a>
         ))}
       </div>
@@ -2487,7 +2488,7 @@ const DEFAULT_AFFIRMATIONS = [
 ];
 
 const HomeLabel = ({ children, action }) => (
-  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
     <div style={{ fontSize:10.5, color:C.textMuted, fontWeight:600, textTransform:'uppercase', letterSpacing:.9 }}>{children}</div>
     {action}
   </div>
@@ -2571,16 +2572,16 @@ const HomeOverview = () => {
   return (
     <div className="fade-in" style={{ maxWidth:980 }}>
       {/* Hero: the greeting, moon, personal day and cycle come first, like opening the app to your day */}
-      <div style={{ position:'relative', overflow:'hidden', borderRadius:26, padding: isMobile?'24px 22px':'32px 36px', marginBottom:16, background:heroBg, border:`0.5px solid ${C.border}` }}>
+      <div style={{ position:'relative', overflow:'hidden', borderRadius:24, padding: isMobile?'18px 18px':'24px 30px', marginBottom:14, background:heroBg, border:`0.5px solid ${C.border}` }}>
         <div className="hero-orb" style={{ position:'absolute', right:-60, top:-80, width:280, height:280, borderRadius:'50%', background:`radial-gradient(circle, ${C.rose}35, transparent 65%)` }}/>
         <div className="hero-orb" style={{ position:'absolute', right:120, bottom:-120, width:220, height:220, borderRadius:'50%', background:`radial-gradient(circle, ${C.accent}30, transparent 65%)`, animationDelay:'-4s' }}/>
         <div style={{ position:'relative' }}>
-          <div style={{ fontSize:12, color:C.textLight, letterSpacing:1.2, textTransform:'uppercase', marginBottom:6 }}>
+          <div style={{ fontSize:11.5, color:C.textLight, letterSpacing:1.1, textTransform:'uppercase', marginBottom:4 }}>
             {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}
           </div>
-          <div style={{ fontFamily:"'DM Serif Display',serif", fontSize: isMobile?30:42, lineHeight:1.05, color:C.rose, marginBottom:12 }}>{greeting}, {userName}<span style={{ color:C.accent }}> ✦</span></div>
-          {todayAffirm && <div style={{ fontFamily:"'DM Serif Display',serif", fontStyle:'italic', fontSize: isMobile?15:17, color:C.roseDark, opacity:.85, maxWidth:560, lineHeight:1.5, marginBottom:18 }}>“{todayAffirm}”</div>}
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+          <div style={{ fontFamily:"'DM Serif Display',serif", fontSize: isMobile?27:36, lineHeight:1.05, color:C.rose, marginBottom:8 }}>{greeting}, {userName}<span style={{ color:C.accent }}> ✦</span></div>
+          {todayAffirm && <div style={{ fontFamily:"'DM Serif Display',serif", fontStyle:'italic', fontSize: isMobile?14.5:16, color:C.roseDark, opacity:.85, maxWidth:560, lineHeight:1.45, marginBottom:12 }}>“{todayAffirm}”</div>}
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
             <span className="glass-chip">{moon.emoji} {moon.label}</span>
             <span className="glass-chip" onClick={()=>go('cosmic','Numerology')} style={{ cursor:'pointer' }}>✧ Personal Day {pDay} · {NUM_INFO[pDay]?.theme||''}</span>
             {cycle && <span className="glass-chip" onClick={()=>go('period','Cycle Overview')} style={{ cursor:'pointer', color:cycle.color }}>● {cycle.name} · Day {cycle.day}</span>}
@@ -4452,7 +4453,7 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
         </div>
       )}
       <div {...sw.bind} style={{ position:'relative', background: sw.dx !== 0 ? C.card : 'transparent', transform: sw.dx ? `translateX(${sw.dx}px)` : 'none', transition: sw.drag ? 'none' : 'transform .26s cubic-bezier(.2,.8,.2,1)', touchAction:'pan-y' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px' }}>
         <Checkbox checked={t.done} onChange={onToggle} />
         <div style={{ flex:1, minWidth:0 }}>
           {editing ? (
@@ -4465,7 +4466,7 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
           {(!hideStatus || due || t.repeat || linkedGoal || t.venture || t.notes || !t.done) && (
             <div style={{ display:'flex', gap:5, marginTop:4, flexWrap:'wrap', alignItems:'center' }}>
               {!t.done && <EnergyChip t={t} onUpdate={onUpdate} />}
-              {!hideStatus && (()=>{ const st = TASK_STATUS.find(x=>x.key===taskStatusKey(t)); return (
+              {!hideStatus && taskStatusKey(t)!=='todo' && (()=>{ const st = TASK_STATUS.find(x=>x.key===taskStatusKey(t)); return (
                 <span style={{ fontSize:10.5, padding:'2px 8px', borderRadius:10, background: st.key==='progress'?`${C.accent}22`:st.key==='done'?'#3f9a6a1f':`${C.lavender}80`, color: st.key==='todo'?C.textLight:st.tone(), fontWeight:500 }}>{st.icon} {st.label}</span>
               ); })()}
               {due && <span style={{ fontSize:10.5, padding:'2px 8px', borderRadius:10, background:tones[due.tone].bg, color:tones[due.tone].fg, fontWeight:500 }}>{due.tone==='overdue'?'⚠ ':''}{due.label}</span>}
@@ -4519,8 +4520,8 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
 const TaskGroup = ({ title, count, tone, children, collapsible=false, action=null }) => {
   const [shut, setShut] = useState(false);
   return (
-    <div style={{ marginBottom:24 }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:8, padding:'0 4px' }}>
+    <div style={{ marginBottom:18 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:6, padding:'0 4px' }}>
         <button onClick={()=>collapsible&&setShut(s=>!s)} style={{ display:'flex', alignItems:'center', gap:8, background:'none', border:'none', padding:0, cursor:collapsible?'pointer':'default', fontFamily:'inherit' }}>
           <span style={{ fontSize:13.5, fontWeight:600, color:tone||C.textLight }}>{title}</span>
           <span style={{ fontSize:12.5, color:C.textMuted, fontVariantNumeric:'tabular-nums' }}>{count}</span>
@@ -4604,12 +4605,12 @@ const TasksPanel = ({ sub }) => {
     body = (<>
       <PhaseSortBanner onChange={()=>setTasks(JSON.parse(localStorage.getItem(storageKey)||'[]'))} />
       {total>0 && (
-        <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:20, padding:'14px 18px', borderRadius:16, background:C.gradA }}>
-          <div style={{ width:46, height:46, borderRadius:'50%', background:`conic-gradient(${C.rose} ${pct*3.6}deg, ${C.card} 0)`, display:'grid', placeItems:'center', flexShrink:0 }}>
-            <div style={{ width:36, height:36, borderRadius:'50%', background:C.card, display:'grid', placeItems:'center', fontSize:11, fontWeight:600, color:C.rose }}>{pct}%</div>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, padding:'10px 14px', borderRadius:16, background:C.gradA }}>
+          <div style={{ width:36, height:36, borderRadius:'50%', background:`conic-gradient(${C.rose} ${pct*3.6}deg, ${C.card} 0)`, display:'grid', placeItems:'center', flexShrink:0 }}>
+            <div style={{ width:28, height:28, borderRadius:'50%', background:C.card, display:'grid', placeItems:'center', fontSize:9.5, fontWeight:600, color:C.rose }}>{pct}%</div>
           </div>
           <div>
-            <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:17, color:C.rose }}>{doneToday.length} of {total} done today</div>
+            <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:15.5, color:C.rose }}>{doneToday.length} of {total} done today</div>
             <div style={{ fontSize:12, color:C.textLight }}>{pct===100?'You cleared the day. ✨':overdue.length?(overdue.length===1?'1 carried over — move it or let it go.':`${overdue.length} carried over — move them or let them go.`):'One at a time.'}</div>
           </div>
         </div>
@@ -4661,12 +4662,13 @@ const TasksPanel = ({ sub }) => {
         const whenLabel = when ? (when===today ? '☀ Today' : prettyDue(when).label) : 'No date';
         return (
         <div ref={addRef} onFocus={()=>setAddFocus(true)} onBlur={()=>setTimeout(()=>{ if (!addRef.current || !addRef.current.contains(document.activeElement)) setAddFocus(false); },180)}
-          style={{ marginBottom:24, background:C.card, border:`0.5px solid ${addFocus ? C.rose+'70' : C.border}`, borderRadius:16, transition:'border-color .15s', boxShadow: addFocus ? `0 6px 20px ${C.rose}12` : 'none' }}>
+          style={{ marginBottom:16, background:C.card, border:`0.5px solid ${addFocus ? C.rose+'70' : C.border}`, borderRadius:16, transition:'border-color .15s', boxShadow: addFocus ? `0 6px 20px ${C.rose}12` : 'none' }}>
           <div style={{ display:'flex', alignItems:'center', gap:12, padding:'6px 8px 6px 14px' }}>
             <span aria-hidden="true" style={{ width:20, height:20, borderRadius:'50%', border:`1.5px dashed ${C.accent}`, flexShrink:0, display:'grid', placeItems:'center', color:C.accent, fontSize:13, lineHeight:1 }}>+</span>
             <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()}
-              placeholder="New task — try “call Grandma fri 3pm”" aria-label="New task"
+              placeholder={addFocus ? 'Try “call Grandma fri 3pm”' : 'New task'} aria-label="New task"
               style={{ flex:1, minWidth:0, padding:'10px 0', border:'none', outline:'none', background:'transparent', color:C.text, fontSize:16, fontFamily:'inherit' }}/>
+            {!addFocus && !input.trim() && when && <span style={{ fontSize:12, color:C.textMuted, whiteSpace:'nowrap', flexShrink:0 }}>{whenLabel}</span>}
             <VoiceButton size={34} onText={t=>setInput(v=>(v?v+' ':'')+t)} />
             {input.trim() && <button onClick={add} style={{ height:34, padding:'0 16px', borderRadius:17, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:600, cursor:'pointer', fontFamily:'inherit', flexShrink:0 }}>Add</button>}
           </div>
@@ -4677,7 +4679,6 @@ const TasksPanel = ({ sub }) => {
               {typedDate && <span style={{ fontSize:11.5, color:C.textMuted }}>from what you typed</span>}
             </div>
           )}
-          {!addFocus && !input.trim() && when && <div style={{ padding:'0 14px 10px 46px', fontSize:11.5, color:C.textMuted, marginTop:-4 }}>Goes on {whenLabel}</div>}
         </div>
         );
       })()}
@@ -12292,7 +12293,7 @@ const MobileMoreMenu = ({ activeNav, onNavSelect, onClose }) => {
               const item = NAV.find(n => n.id === id); if (!item) return null;
               const active = activeNav === id;
               return (
-                <button key={id} onClick={()=>{ onNavSelect(id); onClose(); }} style={{ width:'100%', display:'flex', alignItems:'center', gap:12, padding:'0 14px', minHeight:50, background: active ? `${C.rose}10` : 'transparent', border:'none', cursor:'pointer', fontFamily:'inherit', textAlign:'left' }}>
+                <button key={id} onClick={()=>{ onNavSelect(id); onClose(); }} style={{ width:'100%', display:'flex', alignItems:'center', gap:12, padding:'0 14px', minHeight:46, background: active ? `${C.rose}10` : 'transparent', border:'none', cursor:'pointer', fontFamily:'inherit', textAlign:'left' }}>
                   <span style={{ width:30, height:30, borderRadius:8, display:'grid', placeItems:'center', flexShrink:0, background: _dk ? `${C.rose}30` : `linear-gradient(145deg, ${C.pink}, ${C.lavLight})` }}><Ico d={icons[id]} size={17} active /></span>
                   <span style={{ flex:1, alignSelf:'stretch', display:'flex', alignItems:'center', gap:8, borderBottom: i < g.length-1 ? `0.5px solid ${C.border}` : 'none', marginRight:-14, paddingRight:14 }}>
                     <span style={{ flex:1, fontSize:16, color: active ? C.rose : C.text, fontWeight: active ? 600 : 400 }}>{item.label}</span>
@@ -12346,13 +12347,13 @@ const MobileSubTabs = ({ navItem, activeSub, onSubSelect }) => {
   }, [activeSub, navItem && navItem.id]);
   if (!navItem || !navItem.sub || navItem.sub.length <= 1) return null;
   return (
-    <div ref={rowRef} className="no-scrollbar" style={{ position:'relative', display:'flex', gap:6, overflowX:'auto', margin: isMobile ? '0 -14px 14px' : '0 0 18px', padding: isMobile ? '2px 14px 4px' : '2px 0 4px', WebkitOverflowScrolling:'touch' }}>
+    <div ref={rowRef} className="no-scrollbar" style={{ position:'relative', display:'flex', gap:6, overflowX:'auto', margin: isMobile ? '0 -14px 12px' : '0 0 14px', padding: isMobile ? '2px 14px 4px' : '2px 0 4px', WebkitOverflowScrolling:'touch' }}>
       {navItem.sub.map(s => {
         const badge = navBadge(navItem.id, s); const on = activeSub===s;
         return (
-          <button key={s} onClick={()=>onSubSelect(s)} aria-pressed={on} style={{ height:34, padding:'0 14px', borderRadius:17, border:'none', flexShrink:0, fontFamily:'inherit',
+          <button key={s} onClick={()=>onSubSelect(s)} aria-pressed={on} style={{ height:32, padding:'0 13px', borderRadius:16, border:'none', flexShrink:0, fontFamily:'inherit',
             background: on ? C.rose : (_dk ? 'rgba(255,255,255,.07)' : `${C.rose}0f`), color: on ? '#fff' : C.text,
-            fontSize:14, fontWeight: on ? 600 : 400, cursor:'pointer', whiteSpace:'nowrap', transition:'background .15s' }}>{s==='Recently Deleted'?'🗑 Deleted':s}{badge?<span style={{ opacity:.7, marginLeft:5 }}>{badge.n}</span>:null}</button>
+            fontSize:13.5, fontWeight: on ? 600 : 400, cursor:'pointer', whiteSpace:'nowrap', transition:'background .15s' }}>{s==='Recently Deleted'?'🗑 Deleted':s}{badge?<span style={{ opacity:.7, marginLeft:5 }}>{badge.n}</span>:null}</button>
         );
       })}
     </div>
@@ -12501,7 +12502,7 @@ const App = () => {
 
   const isNotebook = activeNav === 'notebook';
   const isFullWidth = activeNav === 'notebook' || activeNav === 'ideas';
-  const mainPadding = isNotebook ? '0' : isMobile ? 'calc(16px * var(--nyla-space,1)) calc(14px * var(--nyla-space,1)) calc(20px * var(--nyla-space,1))' : 'calc(28px * var(--nyla-space,1)) calc(32px * var(--nyla-space,1))';
+  const mainPadding = isNotebook ? '0' : isMobile ? 'calc(16px * var(--nyla-space,1)) calc(14px * var(--nyla-space,1)) calc(20px * var(--nyla-space,1))' : 'calc(22px * var(--nyla-space,1)) calc(32px * var(--nyla-space,1))';
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:(()=>{
