@@ -127,6 +127,13 @@
     .nav-glow { box-shadow: 0 6px 18px rgba(196,96,122,.28); }
     .no-scrollbar { scrollbar-width: none; } .no-scrollbar::-webkit-scrollbar { display: none; }
     body.more-open .qa-fab { display: none; }
+    /* Pages use the whole window on a computer, like Reminders or Mail, instead of stopping at a
+       fixed width with a blank band on the right. Very wide screens center a 1200px page;
+       Notebook and Ideas are already full width. */
+    @media (min-width: 700px) {
+      main > .fade-in > .fade-in { max-width: 1200px !important; margin-left: auto !important; margin-right: auto !important; }
+      main > .page-notebook > .fade-in, main > .page-ideas > .fade-in { max-width: none !important; }
+    }
     .ql-tile .ql-icon { transition: transform .18s ease; }
     .ql-tile:hover .ql-icon { transform: translateY(-2px); }
     .ql-tile:active .ql-icon { transform: scale(.94); }
@@ -1579,9 +1586,6 @@ const NAV = [
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'vault',      label:'Second Brain', sub:['Browse','Search','In AI Context','Settings'] },
   { id:'goals',      label:'Goals',      sub:['Overview','Yearly','Quarterly','Monthly','Dream Life','Recently Deleted'] },
-  { id:'reflect',    label:'Reflect',    sub:['Close the Day','Weekly Review','Patterns'] },
-  { id:'people',     label:'People',     sub:['Everyone','Reach Out','Birthdays'] },
-  { id:'social',     label:'Social Media', sub:['Overview','Accounts','Content Calendar','Pipeline','Analytics','Ideas & Hashtags','Brand Deals','Recently Deleted'] },
   { id:'cosmic',     label:'Cosmic',     sub:['Overview','Timing','Astrology','Human Design','Numerology','Matrix of Destiny','Astrocartography'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
   { id:'settings',   label:'Settings',   sub:['Profile','AI Connection','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
@@ -2139,9 +2143,7 @@ const searchIndex = () => {
   L('nylaos_goals').forEach(g => out.push({ kind:'Goal', icon:'🎯', title:g.title, sub:`${g.progress||0}%${g.venture?` · ${g.venture}`:''}`, body:g.description, go:()=>window._navigateTo('goals', g.periodType==='quarterly'?'Quarterly':g.periodType==='monthly'?'Monthly':'Yearly') }));
   L('nylaos_ideas').forEach(i => out.push({ kind:'Idea', icon:'💡', title:i.title||i.text||'Idea', body:_htmlToText(i.content||i.description||''), go:()=>{ localStorage.setItem('nylaos_idea_open_request', String(i.id)); window._navigateTo('ideas'); } }));
   L('nylaos_nb_pages').forEach(pg => out.push({ kind:'Note', icon:'📝', title:pg.name||'Untitled page', body:_htmlToText(pg.content||''), go:()=>{ localStorage.setItem('nylaos_nb_open_request', String(pg.id)); window._navigateTo('notebook'); } }));
-  L('nylaos_social_content').forEach(c => out.push({ kind:'Post', icon:platformInfo(c.platform).emoji, title:c.title, sub:[c.status, c.date].filter(Boolean).join(' · '), body:[c.caption,c.hook,c.notes].filter(Boolean).join(' '), go:()=>window._navigateTo('social','Content Calendar') }));
   L('nylaos_shopping_list').forEach(i => out.push({ kind:'Shopping', icon:'🛒', title:i.text, go:()=>window._navigateTo('lists','Shopping List') }));
-  try { if (typeof people_searchItems==='function') people_searchItems().forEach(x => out.push(x)); } catch (e) {}
   return out;
 };
 
@@ -2254,7 +2256,10 @@ const TopBar = ({ activeNav, activeSub, scrolled }) => {
 // University was removed from the nav (Sept 2026, at Nyla's request). Its data keys
 // (nylaos_courses, nylaos_assignments…) are kept untouched, and the University
 // components are still in this file but nothing can open them.
-const NAV_GROUPS = [['home','calendar','tasks','lists'], ['notebook','vault','ideas','goals','reflect'], ['period','cosmic'], ['people','social','agents']];
+// People, Social Media and Reflect (Close the Day, Weekly Review, Patterns) were removed from the nav
+// on Oct 13, 2026, at Nyla's request, the same way University was: their data keys stay untouched and
+// their components are still in this file, but nothing opens them.
+const NAV_GROUPS = [['home','calendar','tasks','lists'], ['notebook','vault','ideas','goals'], ['period','cosmic'], ['agents']];
 
 // Little counts beside sub-pages, so you can see what's waiting without clicking.
 const navBadge = (navId, sub) => {
@@ -2598,8 +2603,6 @@ const HomeOverview = () => {
       <WrappedBanner />
       <MorningBrief />
       <QuickLinksBar />
-      {typeof CloseDayCard==='function' && <CloseDayCard/>}
-      {typeof PeopleHomeCard==='function' && <PeopleHomeCard/>}
 
       <div style={{ display:'grid', gridTemplateColumns: isMobile?'1fr':'1.35fr 1fr', gap:16 }}>
         {/* Today's tasks */}
@@ -10929,7 +10932,6 @@ const CustomNamesPanel = () => {
     {key:'ideas',label:'Ideas section',default:'Ideas',placeholder:'Brain Dump, Lightbulb Room...'},
     {key:'notebook',label:'Notebook section',default:'Notebook',placeholder:'Journal, My Pages, Brain...'},
     {key:'goals',label:'Goals section',default:'Goals',placeholder:'Targets, North Stars...'},
-    {key:'social',label:'Social Media section',default:'Social Media',placeholder:'Content, Socials, Platforms...'},
     {key:'calendar',label:'Calendar section',default:'Calendar',placeholder:'Timeline, Schedule...'},
     {key:'cosmic',label:'Cosmic section',default:'Cosmic',placeholder:'Universe, Stars, Magic...'},
   ];
@@ -11542,7 +11544,7 @@ const SecondBrainPanel = ({ sub }) => {
   /* ── Not linked yet ─────────────────────────────────────────── */
   if (!linked) {
     return (
-      <div style={{ maxWidth:640, margin:'0 auto' }}>
+      <div>
         <SectionHeading>Second Brain</SectionHeading>
         <EmptyState
           icon="🧠"
@@ -11678,7 +11680,7 @@ const SecondBrainPanel = ({ sub }) => {
   /* ── Settings ───────────────────────────────────────────────── */
   if (sub === 'Settings') {
     return (
-      <div style={{ maxWidth:640 }}>
+      <div>
         <SectionHeading>Vault settings</SectionHeading>
         <Card style={{ marginBottom:14 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, flexWrap:'wrap' }}>
@@ -11746,7 +11748,7 @@ const SecondBrainPanel = ({ sub }) => {
 
 /* ── Router ─────────────────────────────────────────────────────── */
 const MainContent = ({ navId, sub, rev=0 }) => (
-  <div key={`${navId}__${sub}${navId==='notebook'||navId==='agents'?'':`__${rev}`}`} className="fade-in" style={navId==='notebook'?{ height:'100%' }:undefined}>
+  <div key={`${navId}__${sub}${navId==='notebook'||navId==='agents'?'':`__${rev}`}`} className={`fade-in page-${navId}`} style={navId==='notebook'?{ height:'100%' }:undefined}>
     {navId==='home'       && (sub==='Overview'?<HomeOverview/>:sub==='Quick Notes'?<SimpleEditor sub="Quick Notes"/>:sub==='Voice Notes'?<VoiceNotes/>:sub==='Brain Dump'?<BrainDump/>:sub==='Year in Review'?<YearInReview/>:<FocusMode/>)}
     {navId==='calendar'   && (sub==='Event Planner'?<EventPlanner/>:<CalendarPanel sub={sub} />)}
     {navId==='tasks'      && <TasksPanel sub={sub} />}

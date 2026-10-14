@@ -747,7 +747,7 @@ const CtPage = () => {
   const reread = () => { try { localStorage.removeItem(ct_CACHE_KEY); } catch (e) {} setData(null); setProgress({ n: 0, label: '' }); setAttempt(a => a + 1); setState('loading'); };
 
   return (
-    <div style={{ maxWidth: 980, minWidth: 0 }}>
+    <div style={{ minWidth: 0 }}>
       <PageTitle subtitle="What the sky is doing next, and the kindest days for what matters."
         right={state === 'ok' && <CtButton quiet onClick={reread} title="Work the sky out again">↻ Read the sky again</CtButton>}>
         Timing
