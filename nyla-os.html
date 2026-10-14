@@ -2569,9 +2569,7 @@ const HomeOverview = () => {
 
   return (
     <div className="fade-in" style={{ maxWidth:980 }}>
-      <QuickLinksBar />
-
-      {/* Hero */}
+      {/* Hero: the greeting, moon, personal day and cycle come first, like opening the app to your day */}
       <div style={{ position:'relative', overflow:'hidden', borderRadius:26, padding: isMobile?'24px 22px':'32px 36px', marginBottom:16, background:heroBg, border:`0.5px solid ${C.border}` }}>
         <div className="hero-orb" style={{ position:'absolute', right:-60, top:-80, width:280, height:280, borderRadius:'50%', background:`radial-gradient(circle, ${C.rose}35, transparent 65%)` }}/>
         <div className="hero-orb" style={{ position:'absolute', right:120, bottom:-120, width:220, height:220, borderRadius:'50%', background:`radial-gradient(circle, ${C.accent}30, transparent 65%)`, animationDelay:'-4s' }}/>
@@ -2592,6 +2590,7 @@ const HomeOverview = () => {
 
       <WrappedBanner />
       <MorningBrief />
+      <QuickLinksBar />
       {typeof CloseDayCard==='function' && <CloseDayCard/>}
       {typeof PeopleHomeCard==='function' && <PeopleHomeCard/>}
 
