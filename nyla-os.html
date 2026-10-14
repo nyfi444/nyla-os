@@ -100,6 +100,7 @@
     @keyframes agentPulse { 0% { box-shadow: 0 0 0 0 var(--pulse-color, rgba(66,133,244,0.5)); } 70% { box-shadow: 0 0 0 9px rgba(0,0,0,0); } 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); } }
     .agent-pulse { animation: agentPulse 1.5s ease-out infinite; }
     /* Motion tokens — applied to <html> based on the Appearance "Motion" setting */
+    @media (prefers-reduced-motion: reduce) { .task-row > div { transition: none !important; } }
     html.motion-reduced *, html.motion-reduced *::before, html.motion-reduced *::after { animation-duration: 0.05s !important; transition-duration: 0.05s !important; }
     html.motion-none *, html.motion-none *::before, html.motion-none *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
     /* ── Polish layer ── */
@@ -2584,6 +2585,11 @@ const HomeOverview = () => {
             <span className="glass-chip" onClick={()=>go('cosmic','Numerology')} style={{ cursor:'pointer' }}>✧ Personal Day {pDay} · {NUM_INFO[pDay]?.theme||''}</span>
             {cycle && <span className="glass-chip" onClick={()=>go('period','Cycle Overview')} style={{ cursor:'pointer', color:cycle.color }}>● {cycle.name} · Day {cycle.day}</span>}
             <span className="glass-chip">{taskTotal ? `${doneToday.length}/${taskTotal} tasks done` : 'Nothing due today'}</span>
+            {(() => { // what's next on today's calendar
+              const n = new Date(); const nowKey = `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`;
+              const next = events.find(e => !e.done && schedHM(e.time) && schedKey(e.time) >= nowKey);
+              return next ? <span className="glass-chip" onClick={()=>go('calendar','Daily')} style={{ cursor:'pointer' }}>⏰ Next: {next.text} · {schedTime(next.time)}</span> : null;
+            })()}
           </div>
         </div>
       </div>
@@ -4391,6 +4397,38 @@ const WhenPicker = ({ value, onChange, compact=false }) => {
   );
 };
 
+// Phone swipes on a row, like Reminders and Mail: swipe right to check it off, swipe
+// left to show Tomorrow and Delete. Touch only; a mostly-vertical drag is left to scrolling.
+const ROW_REVEAL = 148;
+const useRowSwipe = (enabled, onRight) => {
+  const [dx, setDx] = useState(0);
+  const [drag, setDrag] = useState(false);
+  const st = useRef(null);
+  const reset = () => { setDrag(false); setDx(0); };
+  const bind = {
+    onTouchStart: e => { if (!enabled) return; const p = e.touches[0]; st.current = { x:p.clientX, y:p.clientY, base:dx, lock:null, v:dx }; },
+    onTouchMove: e => {
+      const s = st.current; if (!s) return; const p = e.touches[0]; const mx = p.clientX - s.x, my = p.clientY - s.y;
+      if (s.lock === null) { if (Math.abs(mx) < 10 && Math.abs(my) < 10) return; s.lock = Math.abs(mx) > Math.abs(my) ? 'x' : 'y'; if (s.lock === 'x') setDrag(true); }
+      if (s.lock !== 'x') return;
+      let v = s.base + mx;
+      if (v > 120) v = 120 + (v - 120) * 0.3;
+      if (v < -ROW_REVEAL) v = -ROW_REVEAL + (v + ROW_REVEAL) * 0.3;
+      s.v = v; setDx(v);
+    },
+    onTouchEnd: () => {
+      const s = st.current; st.current = null; if (!s || s.lock !== 'x') return;
+      setDrag(false);
+      if (s.v > 90) { setDx(0); onRight && onRight(); try { navigator.vibrate && navigator.vibrate(8); } catch(e) {} }
+      else if (s.v < -60) setDx(-ROW_REVEAL);
+      else setDx(0);
+    },
+    // A tap while the actions are showing just closes them.
+    onClickCapture: e => { if (dx !== 0) { e.stopPropagation(); e.preventDefault(); reset(); } },
+  };
+  return { dx, drag, reset, bind };
+};
+
 const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=false }) => {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(t.text);
@@ -4399,8 +4437,21 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
   const tones = DUE_TONES();
   const linkedGoal = t.goalId ? goals.find(g=>g.id===t.goalId) : null;
   const saveText = () => { setEditing(false); if (text.trim() && text.trim()!==t.text) onUpdate({ text:text.trim() }); else setText(t.text); };
+  const sw = useRowSwipe(!editing, onToggle);
+  const actBtn = { width:ROW_REVEAL/2, border:'none', color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer', fontFamily:'inherit' };
   return (
-    <div className="task-row" style={{ borderRadius:14, background:C.card, border:`0.5px solid ${open?C.rose+'60':C.border}`, transition:'all .18s', boxShadow: open?`0 8px 24px ${C.rose}14`:'none' }}>
+    <div className="task-row" style={{ position:'relative', overflow:'hidden', borderRadius:14, background:C.card, border:`0.5px solid ${open?C.rose+'60':C.border}`, transition:'all .18s', boxShadow: open?`0 8px 24px ${C.rose}14`:'none' }}>
+      {sw.dx !== 0 && (
+        <div style={{ position:'absolute', inset:0, display:'flex', justifyContent: sw.dx>0?'flex-start':'flex-end', alignItems:'stretch', background: sw.dx>0 ? (t.done ? C.textLight : '#4f9d8a') : C.card }}>
+          {sw.dx > 0
+            ? <span aria-hidden="true" style={{ alignSelf:'center', padding:'0 22px', color:'#fff', fontWeight:600, fontSize:14, opacity: Math.min(1, sw.dx/90) }}>{t.done ? '↺ Not done' : '✓ Done'}</span>
+            : <>
+                <button onClick={()=>{ sw.reset(); onUpdate({ calendarDate: addDaysKey(1) }); toast('Moved to tomorrow','success',1200); }} style={{ ...actBtn, background:C.accent }}>Tomorrow</button>
+                <button onClick={()=>{ sw.reset(); onRemove(); }} style={{ ...actBtn, background:'#d05a5a' }}>Delete</button>
+              </>}
+        </div>
+      )}
+      <div {...sw.bind} style={{ position:'relative', background: sw.dx !== 0 ? C.card : 'transparent', transform: sw.dx ? `translateX(${sw.dx}px)` : 'none', transition: sw.drag ? 'none' : 'transform .26s cubic-bezier(.2,.8,.2,1)', touchAction:'pan-y' }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px' }}>
         <Checkbox checked={t.done} onChange={onToggle} />
         <div style={{ flex:1, minWidth:0 }}>
@@ -4459,6 +4510,7 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };
@@ -4492,11 +4544,24 @@ const TasksPanel = ({ sub }) => {
   const [query, setQuery] = useState('');
 
   const save = t => { setTasks(t); localStorage.setItem(storageKey, JSON.stringify(t)); };
+  // One line, like Reminders: "call Grandma fri 3pm" or "water plants every week" fills in the
+  // date, time and repeat (js/smart-parse.js). A typed date wins over the chosen day.
+  const [addFocus, setAddFocus] = useState(false);
+  const addRef = useRef(null);
+  const parseTask = v => { try { return v.trim() && window.nylaSmartParse ? window.nylaSmartParse(v, new Date(), { kind:'task' }) : null; } catch(e) { return null; } };
+  const parsed = parseTask(input);
   const add = () => {
     if (!input.trim()) return;
-    save([...tasks, { id:Date.now(), text:input.trim(), done:false, calendarDate:when||null, created:new Date().toISOString() }]);
+    const p = parseTask(input);
+    const date = (p && p.date) || when || null;
+    const task = { id:Date.now(), text:(p && p.text && p.text.trim()) || input.trim(), done:false, calendarDate:date, created:new Date().toISOString() };
+    if (p && p.time) task.time = p.time;
+    if (p && p.time && p.endTime) task.endTime = p.endTime;
+    if (p && p.repeat) task.repeat = p.repeat;
+    save([...tasks, task]);
     setInput('');
-    toast(when===today?'Added to today ☀':when?`Added for ${prettyDue(when).label}`:'Task added','success',1400);
+    const repeats = task.repeat ? `, repeats ${String(window.nylaSmartParse?.REPEAT_LABEL?.[task.repeat] || task.repeat).toLowerCase()}` : '';
+    toast((date===today?'Added to today ☀':date?`Added for ${prettyDue(date).label}`:'Task added') + repeats,'success',1400);
   };
   const update = (id, patch) => save(tasks.map(t=>t.id===id?{...t,...patch}:t));
   const toggle = id => {
@@ -4590,17 +4655,32 @@ const TasksPanel = ({ sub }) => {
         right={<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Filter…" style={{ width:150, padding:'7px 12px', borderRadius:20, border:`0.5px solid ${C.border}`, background:C.pinkLight, color:C.text, fontSize:12.5, fontFamily:'inherit' }}/>}>
         {sub}
       </PageTitle>
-      {sub!=='Completed' && (
-        <Card style={{ padding:'14px 16px', marginBottom:22, boxShadow:`0 10px 30px ${C.rose}10` }}>
-          <div style={{ display:'flex', gap:10, marginBottom:10 }}>
-            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()} placeholder="Add a task…"
-              style={{ flex:1, padding:'10px 4px', border:'none', background:'transparent', color:C.text, fontSize:15, fontFamily:'inherit' }}/>
-            <VoiceButton onText={t=>setInput(v=>(v?v+' ':'')+t)} />
-            <button onClick={add} disabled={!input.trim()} style={{ padding:'9px 20px', borderRadius:12, background:input.trim()?C.rose:`${C.rose}55`, color:'#fff', border:'none', fontSize:13.5, fontWeight:500, cursor:input.trim()?'pointer':'default' }}>Add</button>
+      {sub!=='Completed' && (() => {
+        const heard = parsed ? (parsed.understood||[]).slice(1) : [];
+        const typedDate = !!(parsed && parsed.date);
+        const whenLabel = when ? (when===today ? '☀ Today' : prettyDue(when).label) : 'No date';
+        return (
+        <div ref={addRef} onFocus={()=>setAddFocus(true)} onBlur={()=>setTimeout(()=>{ if (!addRef.current || !addRef.current.contains(document.activeElement)) setAddFocus(false); },180)}
+          style={{ marginBottom:24, background:C.card, border:`0.5px solid ${addFocus ? C.rose+'70' : C.border}`, borderRadius:16, transition:'border-color .15s', boxShadow: addFocus ? `0 6px 20px ${C.rose}12` : 'none' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12, padding:'6px 8px 6px 14px' }}>
+            <span aria-hidden="true" style={{ width:20, height:20, borderRadius:'50%', border:`1.5px dashed ${C.accent}`, flexShrink:0, display:'grid', placeItems:'center', color:C.accent, fontSize:13, lineHeight:1 }}>+</span>
+            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()}
+              placeholder="New task — try “call Grandma fri 3pm”" aria-label="New task"
+              style={{ flex:1, minWidth:0, padding:'10px 0', border:'none', outline:'none', background:'transparent', color:C.text, fontSize:16, fontFamily:'inherit' }}/>
+            <VoiceButton size={34} onText={t=>setInput(v=>(v?v+' ':'')+t)} />
+            {input.trim() && <button onClick={add} style={{ height:34, padding:'0 16px', borderRadius:17, background:C.rose, color:'#fff', border:'none', fontSize:13.5, fontWeight:600, cursor:'pointer', fontFamily:'inherit', flexShrink:0 }}>Add</button>}
           </div>
-          <WhenPicker value={when} onChange={setWhen}/>
-        </Card>
-      )}
+          {(addFocus || input.trim()) && (
+            <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', padding:'2px 14px 12px 46px' }}>
+              {heard.length > 0 && heard.map((h,i)=><span key={i} style={{ fontSize:12, padding:'3px 10px', borderRadius:12, background:`${C.accent}1c`, color:C.text, fontWeight:500 }}>{h}</span>)}
+              {!typedDate && <WhenPicker value={when} onChange={setWhen} compact/>}
+              {typedDate && <span style={{ fontSize:11.5, color:C.textMuted }}>from what you typed</span>}
+            </div>
+          )}
+          {!addFocus && !input.trim() && when && <div style={{ padding:'0 14px 10px 46px', fontSize:11.5, color:C.textMuted, marginTop:-4 }}>Goes on {whenLabel}</div>}
+        </div>
+        );
+      })()}
       {body}
     </div>
   );
@@ -5937,6 +6017,7 @@ const NotebookPanel = ({ sub }) => {
   const [activePid, setActivePid] = useState(null);
   // Phones work like Notes: the list fills the screen, a page opens full screen with Back.
   const nbPhone = useIsMobile();
+  const [nbFmt, setNbFmt] = useState(false);   // phones: size, color and highlight hide behind Aa, like Notes
 
   // Pick up an "open this page" request from elsewhere in the app (e.g. Idea Bank's Open Notebook Page button)
   useEffect(() => {
@@ -6418,7 +6499,7 @@ const NotebookPanel = ({ sub }) => {
                 <div onClick={()=>{setHeaderEditing(true);setHeaderTitle(activePage.name);}}
                   style={{flex:1,fontSize:15,fontWeight:600,color:C.rose,cursor:'text',fontFamily:"'DM Serif Display',serif"}}>{activePage.name}</div>
               )}
-              <span style={{fontSize:10.5,color:C.textMuted,flexShrink:0}}>{wc} words</span>
+              {!nbPhone && <span style={{fontSize:10.5,color:C.textMuted,flexShrink:0}}>{wc} words</span>}
               {tags.map(t=><span key={t} onClick={()=>setTagFilter(tagFilter===t?'':t)} style={{fontSize:10.5,padding:'2px 8px',borderRadius:10,background:`${C.lavender}70`,color:C.accent,cursor:'pointer',flexShrink:0}}>{t}</span>)}
               <button onClick={exportPDF} title="Download this page as a PDF" style={{padding:'4px 11px',borderRadius:8,background:`${C.lavender}60`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -6435,14 +6516,14 @@ const NotebookPanel = ({ sub }) => {
                     onClose={()=>setShowPageHistory(false)} />
                 )}
               </div>
-              <button onClick={exportNotebookPDF} title="Download the whole notebook as a PDF" style={{padding:'4px 11px',borderRadius:8,background:`${C.rose}18`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
+              {!nbPhone && <button onClick={exportNotebookPDF} title="Download the whole notebook as a PDF" style={{padding:'4px 11px',borderRadius:8,background:`${C.rose}18`,border:`0.5px solid ${C.border}`,color:C.rose,fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                 Notebook
-              </button>
-              <button onClick={()=>window._exportToGoogleDrive()} title="Export all notebooks to a new Google Doc" style={{padding:'4px 11px',borderRadius:8,background:'rgba(66,133,244,0.08)',border:'0.5px solid rgba(66,133,244,0.33)',color:'#4285f4',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
+              </button>}
+              {!nbPhone && <button onClick={()=>window._exportToGoogleDrive()} title="Export all notebooks to a new Google Doc" style={{padding:'4px 11px',borderRadius:8,background:'rgba(66,133,244,0.08)',border:'0.5px solid rgba(66,133,244,0.33)',color:'#4285f4',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
                 {"📝 Docs"}
-              </button>
-              {nbFileLinked?(
+              </button>}
+              {!nbPhone && (nbFileLinked?(
                 <button onClick={()=>{window.unlinkNotebookFile();setNbFileLinked(false);}} title="Auto-saving to local file — click to unlink" style={{padding:'4px 11px',borderRadius:8,background:`#68c97a22`,border:`0.5px solid #68c97a66`,color:'#3a8a4a',fontSize:11,cursor:'pointer',flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
                   <span style={{width:6,height:6,borderRadius:'50%',background:'#68c97a',display:'inline-block'}}/>
                   Saving to file
@@ -6452,11 +6533,13 @@ const NotebookPanel = ({ sub }) => {
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                   Save to file
                 </button>
-              )}
+              ))}
             </div>
 
             {/* ── Formatting toolbar — row 1: text style ── */}
-            <div style={{padding:'4px 10px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:2,flexWrap:'nowrap',background:panelBg,flexShrink:0,overflowX:'auto'}}>
+            <div className="no-scrollbar" style={{padding:'4px 10px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:2,flexWrap:'nowrap',background:panelBg,flexShrink:0,overflowX:'auto'}}>
+              {nbPhone && <button onMouseDown={e=>{e.preventDefault();setNbFmt(v=>!v);}} aria-pressed={nbFmt} title="Text size and color"
+                style={{padding:'4px 10px',borderRadius:8,border:'none',cursor:'pointer',background:nbFmt?C.rose:`${C.rose}14`,color:nbFmt?'#fff':C.rose,fontFamily:"'DM Serif Display',serif",fontSize:15,flexShrink:0,marginRight:4}}>Aa</button>}
               <TBtn cmd="undo" label="↩" title="Undo (Ctrl+Z)"/>
               <TBtn cmd="redo" label="↪" title="Redo (Ctrl+Y)"/>
               <Sep/>
@@ -6491,7 +6574,7 @@ const NotebookPanel = ({ sub }) => {
             </div>
 
             {/* ── Formatting toolbar — row 2: size + color (always visible) ── */}
-            <div style={{padding:'5px 10px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:8,background:`${C.lavLight}80`,flexShrink:0,flexWrap:'wrap'}}>
+            <div style={{padding:'5px 10px',borderBottom:`0.5px solid ${C.border}`,display: nbPhone && !nbFmt ? 'none' : 'flex',alignItems:'center',gap:8,background:`${C.lavLight}80`,flexShrink:0,flexWrap:'wrap'}}>
               {/* Font size presets */}
               <div style={{display:'flex',alignItems:'center',gap:3}}>
                 <span style={{fontSize:9.5,color:C.textMuted,fontWeight:600,letterSpacing:0.5,textTransform:'uppercase',marginRight:2}}>Size</span>
@@ -12392,6 +12475,9 @@ const App = () => {
     return () => { window.removeEventListener('nyla:data-changed', onData); window._remountOnDataChange = false; };
   }, []);
   const [railLabels, toggleRailLabels] = useRailLabels();
+  // The phone's status bar takes theme-color. The page starts rose to match the launch cover;
+  // once the app is up it matches the top bar, so there's no rose band above a cream page.
+  useEffect(() => { try { document.querySelector('meta[name="theme-color"]')?.setAttribute('content', C.cream); } catch(e) {} }, []);
   // The top bar turns into a frosted bar with a hairline once the page scrolls under it.
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => { setScrolled(false); }, [activeNav, activeSub]);
