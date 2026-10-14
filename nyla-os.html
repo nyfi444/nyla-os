@@ -115,12 +115,20 @@
     .hero-orb { animation: orbFloat 12s ease-in-out infinite; pointer-events:none; }
     @keyframes micPulse { 0% { box-shadow: 0 0 0 0 rgba(196,96,122,.5); } 70% { box-shadow: 0 0 0 10px rgba(196,96,122,0); } 100% { box-shadow: 0 0 0 0 rgba(196,96,122,0); } }
     .mic-live { animation: micPulse 1.4s ease-out infinite; }
+    .task-list > .task-row { border-radius:0 !important; border:none !important; box-shadow:none !important; background:transparent !important; position:relative; }
+    .task-list > .task-row + .task-row::before { content:''; position:absolute; top:0; left:48px; right:0; height:0.5px; background:var(--sep); }
+    .task-list > .task-row:hover { background:var(--open) !important; }
+    .task-list > :not(.task-row) { padding:12px 16px !important; }
     .task-row .row-quick { opacity: 0; transition: opacity .15s; }
     .task-row:hover .row-quick, .task-row .row-quick.on { opacity: 1; }
     @media (hover: none) { .task-row .row-quick { opacity: 1; } }
     @keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
     .nav-glow { box-shadow: 0 6px 18px rgba(196,96,122,.28); }
     .no-scrollbar { scrollbar-width: none; } .no-scrollbar::-webkit-scrollbar { display: none; }
+    body.more-open .qa-fab { display: none; }
+    .ql-tile .ql-icon { transition: transform .18s ease; }
+    .ql-tile:hover .ql-icon { transform: translateY(-2px); }
+    .ql-tile:active .ql-icon { transform: scale(.94); }
     .book-lift { transition: transform .2s ease; }
     .book-tile:hover .book-lift { transform: translateY(-5px) rotate(-1.5deg); }
     .rail-btn { position: relative; }
@@ -2047,8 +2055,8 @@ const SyncButton = () => {
     <div style={{position:'relative'}}>
       <button onClick={()=>setOpen(o=>!o)}
         title={sync.user?`Signed in as ${sync.user.email}`:'Enable cross-device sync'}
-        style={{display:'flex',alignItems:'center',gap:5,padding:'6px 11px',borderRadius:10,
-          background:effStatus==='conflict'?'#F4A26125':`${C.pink}55`,border:`0.5px solid ${effStatus==='conflict'?'#F4A261':C.border}`,cursor:'pointer',fontSize:12,color:C.text}}>
+        style={{display:'flex',alignItems:'center',gap:6,height:34,padding:'0 10px',borderRadius:10,fontFamily:'inherit',
+          background:effStatus==='conflict'?'#F4A26125':'transparent',border:'none',cursor:'pointer',fontSize:12.5,color:C.textLight}}>
         <span style={{width:7,height:7,borderRadius:'50%',background:dotColor,flexShrink:0,
           boxShadow:effStatus==='syncing'?`0 0 5px ${C.accent}`:undefined}}/>
         {label}
@@ -2183,51 +2191,59 @@ const GlobalSearch = ({ onClose }) => {
   );
 };
 
-const TopBar = ({ activeNav, activeSub }) => {
+const TopBar = ({ activeNav, activeSub, scrolled }) => {
   const isMobile = useIsMobile();
-  const now = new Date();
-  const h = now.getHours();
-  const greeting = h<5?'Still up':h<12?'Good morning':h<17?'Good afternoon':'Good evening';
   const [showSearch, setShowSearch] = useState(false);
   useEffect(()=>{
     const fn = e => { if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k') { e.preventDefault(); setShowSearch(v=>!v); } };
     window.addEventListener('keydown', fn); return ()=>window.removeEventListener('keydown', fn);
   },[]);
-  const userName = JSON.parse(localStorage.getItem('nylaos_profile')||'{"name":"Nyla"}').name || 'Nyla';
   const item = NAV.find(n=>n.id===activeNav);
-  const isHome = false; // Home's hero already greets you
-  const iconBtn = { width:36, height:36, borderRadius:12, background:C.card, border:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:15 };
-  return (
-    <div style={{ height: isMobile?56:62, background: _dk?'rgba(28,21,32,.86)':'rgba(253,250,247,.86)', backdropFilter:'blur(12px)', WebkitBackdropFilter:'blur(12px)',
-      borderBottom:`0.5px solid ${C.border}`, display:'flex', alignItems:'center', gap:10, padding: isMobile?'0 14px':'0 24px', flexShrink:0, zIndex:20 }}>
-      {isMobile && <div style={{ width:32, height:32, borderRadius:10, background:`linear-gradient(135deg, ${C.rose}, ${C.accent})`, color:'#fff', display:'grid', placeItems:'center', fontFamily:"'DM Serif Display',serif", fontSize:15, flexShrink:0 }}>N</div>}
-      <div style={{ minWidth:0, marginRight:'auto' }}>
-        {isHome ? (
-          <>
-            <div style={{ fontFamily:"'DM Serif Display',serif", fontSize: isMobile?15:17, color:C.rose, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{greeting}, {userName} ✦</div>
-            <div style={{ fontSize:11.5, color:C.textLight }}>{now.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
-          </>
-        ) : (
-          <div style={{ display:'flex', alignItems:'baseline', gap:8, whiteSpace:'nowrap', overflow:'hidden' }}>
-            <span style={{ fontFamily:"'DM Serif Display',serif", fontSize: isMobile?16:18, color:C.rose }}>{item?.label}</span>
-            {activeSub && !isMobile && <><span style={{ color:C.textMuted, fontSize:13 }}>/</span><span style={{ fontSize:13, color:C.textLight, overflow:'hidden', textOverflow:'ellipsis' }}>{activeSub}</span></>}
-          </div>
-        )}
+  // Toolbar buttons are plain icons, like a Mac or iPhone toolbar: no box until you point at them.
+  const iconBtn = { width:36, height:36, borderRadius:10, background:'transparent', border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:16, color:C.textLight, flexShrink:0, transition:'background .12s' };
+  const hov = { onMouseEnter:e=>e.currentTarget.style.background=_dk?'rgba(255,255,255,.07)':`${C.rose}12`, onMouseLeave:e=>e.currentTarget.style.background='transparent' };
+  const darkToggle = (
+    <button {...hov} onClick={()=>{
+      const ap=JSON.parse(localStorage.getItem('nylaos_appearance')||'{}');
+      ap.darkMode=!ap.darkMode;
+      localStorage.setItem('nylaos_appearance',JSON.stringify(ap));
+      toast(ap.darkMode?'Dark mode on 🌙':'Light mode on ☀️','info',1800);
+      setTimeout(()=>location.reload(),400);
+    }} title={_dk?'Light mode':'Dark mode'} aria-label={_dk?'Light mode':'Dark mode'} style={iconBtn}>{_dk?'☀️':'🌙'}</button>
+  );
+  const bar = {
+    flexShrink:0, zIndex:20, transition:'background .2s, border-color .2s',
+    background: scrolled ? (_dk?'rgba(28,21,32,.82)':'rgba(253,250,247,.82)') : C.cream,
+    backdropFilter: scrolled ? 'saturate(1.6) blur(16px)' : 'none', WebkitBackdropFilter: scrolled ? 'saturate(1.6) blur(16px)' : 'none',
+    borderBottom:`0.5px solid ${scrolled ? C.border : 'transparent'}`,
+  };
+  if (isMobile) return (
+    <div style={{ ...bar, height:52, display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', padding:'0 8px' }}>
+      <div style={{ display:'flex', justifyContent:'flex-start', minWidth:0 }}><SyncButton /></div>
+      <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:18, color:C.rose, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'52vw', textAlign:'center' }}>{item?.label}</div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:2 }}>
+        {showSearch && <GlobalSearch onClose={()=>setShowSearch(false)}/>}
+        <button onClick={()=>setShowSearch(s=>!s)} aria-label="Search everything" style={iconBtn}><Ico d={icons.search} size={19} active={showSearch} /></button>
+        {darkToggle}
       </div>
-      {!isMobile && <QuickAdd variant="bar"/>}
+    </div>
+  );
+  return (
+    <div style={{ ...bar, height:56, display:'flex', alignItems:'center', gap:8, padding:'0 20px 0 28px' }}>
+      <div style={{ minWidth:0, marginRight:'auto', display:'flex', alignItems:'baseline', gap:9, whiteSpace:'nowrap', overflow:'hidden' }}>
+        <span style={{ fontFamily:"'DM Serif Display',serif", fontSize:19, color:C.rose }}>{item?.label}</span>
+      </div>
       {showSearch && <GlobalSearch onClose={()=>setShowSearch(false)}/>}
-      <button onClick={()=>setShowSearch(s=>!s)} title="Search everything (⌘K)" style={{ ...iconBtn, width: isMobile?36:'auto', padding: isMobile?0:'0 12px', gap:8, color:C.textMuted, fontSize:12.5 }}>
-        <Ico d={icons.search} size={16} active={showSearch} />
-        {!isMobile && <><span>Search</span><span style={{ fontSize:10.5, border:`0.5px solid ${C.border}`, borderRadius:5, padding:'0 5px' }}>{/Mac|iPhone|iPad/.test(navigator.platform)?'⌘K':'Ctrl K'}</span></>}
+      <button onClick={()=>setShowSearch(s=>!s)} title="Search everything (⌘K)"
+        style={{ height:34, width:230, borderRadius:10, border:'none', cursor:'pointer', display:'flex', alignItems:'center', gap:8, padding:'0 10px', fontFamily:'inherit', fontSize:13, color:C.textMuted, flexShrink:1, minWidth:120,
+          background: _dk ? 'rgba(255,255,255,.06)' : `${C.rose}0d` }}>
+        <Ico d={icons.search} size={15} active={showSearch} />
+        <span style={{ flex:1, textAlign:'left' }}>Search</span>
+        <span style={{ fontSize:11, color:C.textMuted }}>{/Mac|iPhone|iPad/.test(navigator.platform)?'⌘K':'Ctrl K'}</span>
       </button>
+      <QuickAdd variant="bar"/>
       <SyncButton />
-      <button onClick={()=>{
-        const ap=JSON.parse(localStorage.getItem('nylaos_appearance')||'{}');
-        ap.darkMode=!ap.darkMode;
-        localStorage.setItem('nylaos_appearance',JSON.stringify(ap));
-        toast(ap.darkMode?'Dark mode on 🌙':'Light mode on ☀️','info',1800);
-        setTimeout(()=>location.reload(),400);
-      }} title={_dk?'Light mode':'Dark mode'} style={iconBtn}>{_dk?'☀️':'🌙'}</button>
+      {darkToggle}
     </div>
   );
 };
@@ -2262,60 +2278,81 @@ const navBadge = (navId, sub) => {
   return null;
 };
 
-const LeftSidebar = ({ activeNav, onNavSelect, secCollapsed, onToggleSec }) => {
-  const settings = NAV.find(n=>n.id==='settings');
-  // Names beside the icons, with a button at the bottom to fold back to icons
-  // only. On by default on a laptop-sized window; the choice is kept per device
-  // (nyla_ prefix, so it doesn't sync), since phones use the bottom tab bar.
+// One sidebar, like Mail or Notes: every section on the left, and the open
+// section shows its pages right underneath it (this replaced the icon rail +
+// second menu column, Oct 2026). Settings is the last group. The toggle at the
+// bottom folds it to icons only, kept per device (nyla_ prefix, so it doesn't
+// sync); then the pages show as tabs at the top of the page instead.
+const useRailLabels = () => {
   const [labels, setLabels] = useState(()=>{
     try { const v = localStorage.getItem('nyla_rail_labels'); return v ? v==='1' : window.innerWidth>=1100; } catch(e) { return true; }
   });
-  const toggleLabels = () => setLabels(v=>{ const next = !v; try { localStorage.setItem('nyla_rail_labels', next?'1':'0'); } catch(e) {} return next; });
+  const toggle = () => setLabels(v=>{ const next = !v; try { localStorage.setItem('nyla_rail_labels', next?'1':'0'); } catch(e) {} return next; });
+  return [labels, toggle];
+};
+
+const LeftSidebar = ({ activeNav, onNavSelect, activeSub, onSubSelect, labels, onToggleLabels }) => {
+  const [, tick] = useState(0);
+  useEffect(()=>{ const t = setInterval(()=>tick(x=>x+1), 4000); return ()=>clearInterval(t); },[]);
   // Icon-only buttons keep their hover tooltip; labelled rows don't need one.
   const tip = text => labels ? {} : { className:'rail-btn', 'data-tip':text };
-  const NavBtn = ({ item }) => {
-    const active = activeNav === item.id;
+  const selBg = _dk ? `${C.rose}2b` : `${C.rose}17`;
+  const hoverBg = _dk ? `${C.rose}18` : `${C.rose}0b`;
+  const hover = active => ({
+    onMouseEnter: e=>{ if(!active) e.currentTarget.style.background=hoverBg; },
+    onMouseLeave: e=>{ if(!active) e.currentTarget.style.background='transparent'; },
+  });
+  const SubRow = ({ item, sub }) => {
+    const active = activeSub===sub; const trash = sub==='Recently Deleted';
+    const badge = !trash && navBadge(item.id, sub);
     return (
-      <button onClick={()=>onNavSelect(item.id)} aria-label={item.label} {...tip(item.label)}
-        style={{ width: labels?'100%':46, height: labels?36:46, borderRadius: labels?11:15, flexShrink:0, position:'relative', display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:11, padding: labels?'0 12px':0, cursor:'pointer', transition:'all .18s', fontFamily:'inherit',
-          background: active ? (_dk ? `linear-gradient(145deg, ${C.rose}40, ${C.accent}30)` : `linear-gradient(145deg, ${C.pink}, ${C.lavLight})`) : 'transparent', border:`0.5px solid ${active?C.border:'transparent'}`,
-          boxShadow: active ? `0 6px 16px ${C.rose}2e` : 'none' }}
-        onMouseEnter={e=>{ if(labels && !active) e.currentTarget.style.background=`${C.pink}45`; }} onMouseLeave={e=>{ if(labels && !active) e.currentTarget.style.background='transparent'; }}>
-        <Ico d={icons[item.id]} size={20} active={active} />
-        {labels && <span style={{ fontSize:13.5, fontWeight: active?600:400, color: active?C.rose:C.textLight, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.label}</span>}
-        {active && <span style={{ position:'absolute', left:-10, top:'50%', transform:'translateY(-50%)', width:4, height:22, borderRadius:4, background:`linear-gradient(${C.rose}, ${C.accent})` }}/>}
+      <button onClick={()=>onSubSelect(sub)} {...hover(active)}
+        style={{ width:'100%', height:30, display:'flex', alignItems:'center', gap:8, padding:'0 10px 0 41px', borderRadius:9, border:'none', cursor:'pointer', textAlign:'left', flexShrink:0,
+          background: active ? selBg : 'transparent', color: active ? C.rose : trash ? C.textMuted : C.textLight, fontSize:13, fontWeight: active?600:400, fontFamily:'inherit', transition:'background .12s' }}>
+        <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</span>
+        {badge && <span style={{ fontSize:11, fontVariantNumeric:'tabular-nums', flexShrink:0, color: badge.hot ? '#c65454' : C.textMuted, fontWeight: badge.hot?600:400 }}>{badge.n}</span>}
       </button>
     );
   };
-  // The logo stays pinned at the top and Settings + the label toggle at the
-  // bottom; only the section list between them scrolls on a short window.
-  const col = { display:'flex', flexDirection:'column', alignItems: labels?'stretch':'center', gap:3 };
+  const NavBtn = ({ item }) => {
+    const active = activeNav === item.id;
+    const open = labels && active && item.sub.length > 1;
+    return (
+      <>
+        <button onClick={()=>onNavSelect(item.id)} aria-label={item.label} aria-current={active?'page':undefined} {...tip(item.label)} {...hover(active)}
+          style={{ width: labels?'100%':44, height: labels?34:44, borderRadius: labels?10:13, flexShrink:0, display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:11, padding: labels?'0 10px':0, cursor:'pointer', border:'none', fontFamily:'inherit',
+            background: active && !open ? selBg : 'transparent', transition:'background .12s' }}>
+          <Ico d={icons[item.id]} size={19} active={active} />
+          {labels && <span style={{ flex:1, textAlign:'left', fontSize:13.5, fontWeight: active?600:500, color: active?C.rose:C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.label}</span>}
+        </button>
+        {open && <div style={{ display:'flex', flexDirection:'column', gap:1, margin:'1px 0 6px' }}>{item.sub.map(s=><SubRow key={s} item={item} sub={s}/>)}</div>}
+      </>
+    );
+  };
+  const groups = [...NAV_GROUPS, ['settings']];
+  const col = { display:'flex', flexDirection:'column', alignItems: labels?'stretch':'center', gap:2 };
   return (
-    <div style={{ ...col, width: labels?200:72, transition:'width .2s ease', background:C.sidebarBg, borderRight:`0.5px solid ${C.border}`, padding: labels?'14px 12px 12px':'14px 0 12px', flexShrink:0, overflow:'hidden' }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:10, marginBottom:6, paddingLeft: labels?3:0, flexShrink:0 }}>
-        <button onClick={()=>onNavSelect('home')} aria-label="Home" style={{ width:40, height:40, borderRadius:13, border:'none', cursor:'pointer', position:'relative', flexShrink:0,
-          background:`linear-gradient(135deg, ${C.rose}, ${C.accent})`, color:'#fff', fontFamily:"'DM Serif Display',serif", fontSize:18, boxShadow:`0 6px 18px ${C.rose}55` }}>
-          N<span style={{ position:'absolute', top:4, right:6, fontSize:8 }}>✦</span>
+    <div style={{ ...col, width: labels?236:68, transition:'width .2s ease', background:C.sidebarBg, borderRight:`0.5px solid ${C.border}`, padding: labels?'16px 10px 10px':'16px 0 10px', flexShrink:0, overflow:'hidden' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:10, margin:'0 0 14px', paddingLeft: labels?6:0, flexShrink:0 }}>
+        <button onClick={()=>onNavSelect('home')} aria-label="Home" style={{ width:34, height:34, borderRadius:11, border:'none', cursor:'pointer', position:'relative', flexShrink:0,
+          background:`linear-gradient(135deg, ${C.rose}, ${C.accent})`, color:'#fff', fontFamily:"'DM Serif Display',serif", fontSize:16, boxShadow:`0 4px 12px ${C.rose}40` }}>
+          N<span style={{ position:'absolute', top:3, right:5, fontSize:7 }}>✦</span>
         </button>
         {labels && <span style={{ fontFamily:"'DM Serif Display',serif", fontSize:19, color:C.rose, whiteSpace:'nowrap', flex:1 }}>Nyla OS</span>}
-        {labels && <button onClick={onToggleSec} title={secCollapsed?'Show menu':'Hide menu'} aria-label={secCollapsed?'Show menu':'Hide menu'}
-          style={{ width:26, height:22, borderRadius:8, background:'transparent', border:`0.5px solid ${C.border}`, cursor:'pointer', fontSize:12, color:C.textMuted, flexShrink:0, fontFamily:'inherit' }}>{secCollapsed?'›':'‹'}</button>}
       </div>
-      {!labels && <button onClick={onToggleSec} title={secCollapsed?'Show menu':'Hide menu'} {...tip(secCollapsed?'Show menu':'Hide menu')}
-        style={{ width:30, height:20, borderRadius:8, background:'transparent', border:`0.5px solid ${C.border}`, cursor:'pointer', fontSize:12, color:C.textMuted, marginBottom:8, flexShrink:0 }}>{secCollapsed?'›':'‹'}</button>}
-      {/* Negative margin + matching padding so the active marker (left:-10) isn't clipped by the scroll box. */}
-      <div className="no-scrollbar" style={{ ...col, flex:1, minHeight:0, overflowY:'auto', overflowX:'hidden', margin: labels?'0 -12px':0, padding: labels?'0 12px 8px':'0 0 8px', alignSelf:'stretch' }}>
-        {NAV_GROUPS.map((g,gi)=>(
+      {/* Negative margin + matching padding so focus rings aren't clipped by the scroll box. */}
+      <div className="no-scrollbar" style={{ ...col, flex:1, minHeight:0, overflowY:'auto', overflowX:'hidden', margin: labels?'0 -10px':0, padding: labels?'0 10px 8px':'0 0 8px', alignSelf:'stretch' }}>
+        {groups.map((g,gi)=>(
           <React.Fragment key={gi}>
-            {gi>0 && <div style={{ width: labels?'100%':26, height:1, background:C.border, margin: labels?'4px 0':'6px 0', flexShrink:0 }}/>}
+            {gi>0 && <div style={{ height: labels?12:10, flexShrink:0 }}/>}
             {g.map(id=>{ const item = NAV.find(n=>n.id===id); return item ? <NavBtn key={id} item={item}/> : null; })}
           </React.Fragment>
         ))}
       </div>
-      {settings && <NavBtn item={settings}/>}
-      <button onClick={toggleLabels} aria-label={labels?'Hide labels':'Show labels'} title={labels?'Hide labels':'Show labels'} {...tip('Show labels')}
-        style={{ marginTop:6, flexShrink:0, height:34, width: labels?'100%':46, borderRadius:11, border:`0.5px solid ${C.border}`, background:'transparent', color:C.textMuted, cursor:'pointer', fontSize:12, display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:8, padding: labels?'0 12px':0, fontFamily:'inherit', whiteSpace:'nowrap' }}>
-        <span style={{ fontSize:15, lineHeight:1 }}>{labels?'«':'»'}</span>{labels && 'Hide labels'}
+      <button onClick={onToggleLabels} aria-label={labels?'Show icons only':'Show the full menu'} {...tip('Show the full menu')} {...hover(false)}
+        style={{ marginTop:6, flexShrink:0, height:32, width: labels?'100%':44, borderRadius:10, border:'none', background:'transparent', color:C.textMuted, cursor:'pointer', fontSize:12.5, display:'flex', alignItems:'center', justifyContent: labels?'flex-start':'center', gap:10, padding: labels?'0 10px':0, fontFamily:'inherit' }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+        {labels && 'Icons only'}
       </button>
     </div>
   );
@@ -2416,6 +2453,24 @@ const QuickLinksBar = () => {
   const chipBase = { display:'inline-flex', alignItems:'center', gap:7, padding:'7px 14px', borderRadius:22, background:C.card,
     border:`0.5px solid ${C.border}`, color:C.text, fontSize:12.5, fontWeight:500, textDecoration:'none', transition:'all 0.15s',
     boxShadow:`0 2px 8px ${C.rose}0f` };
+  // Not editing: one row of app-style icons, like Safari's Favorites; it scrolls sideways when there are many.
+  if (!editing) return (
+    <div style={{ marginBottom:20 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+        <div style={{ fontSize:13, color:C.textLight, fontWeight:600 }}>Favorites</div>
+        <button onClick={()=>setEditing(true)} style={{ fontSize:13, color:C.rose, background:'none', border:'none', cursor:'pointer', fontFamily:'inherit', padding:'4px 2px' }}>{links.length ? 'Edit' : '+ Add a link'}</button>
+      </div>
+      <div className="no-scrollbar" style={{ display:'flex', gap:4, overflowX:'auto', margin:'0 -6px', padding:'2px 0 4px', WebkitOverflowScrolling:'touch' }}>
+        {links.map(link => (
+          <a key={link.id} href={link.url} target="_blank" rel="noopener noreferrer" title={link.label} className="ql-tile"
+            style={{ width:70, flexShrink:0, display:'flex', flexDirection:'column', alignItems:'center', gap:6, textDecoration:'none', padding:'4px 0' }}>
+            <span className="ql-icon" style={{ width:50, height:50, borderRadius:14, display:'grid', placeItems:'center', background:C.card, border:`0.5px solid ${C.border}`, boxShadow:`0 1px 2px rgba(64,24,40,.05), 0 4px 12px ${C.rose}10` }}><QuickLinkIcon link={link} size={26}/></span>
+            <span style={{ fontSize:11, color:C.text, maxWidth:66, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{link.label}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
   return (
     <div style={{ marginBottom:22 }}>
       <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
@@ -4442,16 +4497,20 @@ const TaskRow = ({ t, goals, onToggle, onUpdate, onRemove, onStatus, hideStatus=
   );
 };
 
-const TaskGroup = ({ title, count, tone, children, collapsible=false }) => {
+// A group of tasks is one rounded list with hairlines between rows, like Reminders.
+const TaskGroup = ({ title, count, tone, children, collapsible=false, action=null }) => {
   const [shut, setShut] = useState(false);
   return (
-    <div style={{ marginBottom:22 }}>
-      <button onClick={()=>collapsible&&setShut(s=>!s)} style={{ display:'flex', alignItems:'center', gap:8, background:'none', border:'none', padding:'0 2px', marginBottom:9, cursor:collapsible?'pointer':'default' }}>
-        <span style={{ fontSize:11, fontWeight:600, letterSpacing:.8, textTransform:'uppercase', color:tone||C.textMuted }}>{title}</span>
-        <span style={{ fontSize:10.5, padding:'1px 7px', borderRadius:10, background:`${C.accent}22`, color:C.text }}>{count}</span>
-        {collapsible && <span style={{ fontSize:10, color:C.textMuted }}>{shut?'▸':'▾'}</span>}
-      </button>
-      {!shut && <div style={{ display:'flex', flexDirection:'column', gap:7 }}>{children}</div>}
+    <div style={{ marginBottom:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:8, padding:'0 4px' }}>
+        <button onClick={()=>collapsible&&setShut(s=>!s)} style={{ display:'flex', alignItems:'center', gap:8, background:'none', border:'none', padding:0, cursor:collapsible?'pointer':'default', fontFamily:'inherit' }}>
+          <span style={{ fontSize:13.5, fontWeight:600, color:tone||C.textLight }}>{title}</span>
+          <span style={{ fontSize:12.5, color:C.textMuted, fontVariantNumeric:'tabular-nums' }}>{count}</span>
+          {collapsible && <span style={{ fontSize:10, color:C.textMuted }}>{shut?'▸':'▾'}</span>}
+        </button>
+        {action}
+      </div>
+      {!shut && <div className="task-list" style={{ display:'flex', flexDirection:'column', background:C.card, border:`0.5px solid ${C.border}`, borderRadius:16, overflow:'hidden', '--sep':C.border, '--open':`${C.rose}0a` }}>{children}</div>}
     </div>
   );
 };
@@ -4525,10 +4584,9 @@ const TasksPanel = ({ sub }) => {
         </div>
       )}
       {overdue.length>0 && (
-        <TaskGroup title="Overdue" count={overdue.length} tone="#d05a5a">
-          <div style={{ display:'flex', justifyContent:'flex-end', marginTop:-4 }}>
+        <TaskGroup title="Overdue" count={overdue.length} tone="#d05a5a" action={
             <button onClick={()=>save(tasks.map(t=>overdue.some(o=>o.id===t.id)?{...t,calendarDate:today}:t))} style={{ fontSize:11.5, color:C.rose, background:'none', border:'none', cursor:'pointer' }}>Move all to today →</button>
-          </div>
+          }>
           {overdue.map(row)}
         </TaskGroup>
       )}
@@ -5911,6 +5969,8 @@ const NotebookPanel = ({ sub }) => {
   const [pages, setPages] = useState(()=>JSON.parse(localStorage.getItem(PK)||'[]'));
   const [activeFid, setActiveFid] = useState(()=>{ const f=DEFAULT_FOLDERS.find(f=>f.name===sub); return f?f.id:1; });
   const [activePid, setActivePid] = useState(null);
+  // Phones work like Notes: the list fills the screen, a page opens full screen with Back.
+  const nbPhone = useIsMobile();
 
   // Pick up an "open this page" request from elsewhere in the app (e.g. Idea Bank's Open Notebook Page button)
   useEffect(() => {
@@ -6179,7 +6239,8 @@ const NotebookPanel = ({ sub }) => {
     <div className="fade-in" style={{display:'flex',height:'100%',overflow:'hidden'}}>
 
       {/* ── Left sidebar ── */}
-      <div style={{width:210,background:panelBg,borderRight:`0.5px solid ${C.border}`,display:'flex',flexDirection:'column',overflow:'hidden',flexShrink:0}}>
+      <div style={{width: nbPhone?'100%':210,background:panelBg,borderRight: nbPhone?'none':`0.5px solid ${C.border}`,display: nbPhone && (activePage||showGraph) ? 'none' : 'flex',flexDirection:'column',overflow:'hidden',flexShrink:0,
+        paddingBottom: nbPhone ? 'calc(96px + env(safe-area-inset-bottom,0px))' : 0}}>
 
         {/* Top actions */}
         <div style={{padding:'10px 10px 6px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:4}}>
@@ -6372,13 +6433,16 @@ const NotebookPanel = ({ sub }) => {
       </div>
 
       {/* ── Right editor area ── */}
-      <div style={{flex:1,display:'flex',flexDirection:'column',background:C.cream,minWidth:0}}>
+      <div style={{flex:1,display: nbPhone && !(activePage||showGraph) ? 'none' : 'flex',flexDirection:'column',background:C.cream,minWidth:0,
+        paddingBottom: nbPhone ? 'calc(84px + env(safe-area-inset-bottom,0px))' : 0}}>
+        {nbPhone && showGraph && <button onClick={()=>setShowGraph(false)} style={{alignSelf:'flex-start',margin:'8px 10px 0',padding:'6px 8px',border:'none',background:'none',color:C.rose,fontSize:16,cursor:'pointer',fontFamily:'inherit'}}>‹ Notes</button>}
         {showGraph ? (
           <NoteGraph pages={pages} folders={folders} activePid={activePid} onSelectPage={id=>{setActivePid(id);setShowGraph(false);}}/>
         ) : activePage ? (
           <>
             {/* Title bar */}
-            <div style={{padding:'10px 18px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+            <div style={{padding: nbPhone?'8px 12px':'10px 18px',borderBottom:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:10,flexShrink:0,flexWrap: nbPhone?'wrap':'nowrap'}}>
+              {nbPhone && <button onClick={()=>setActivePid(null)} aria-label="Back to notes" style={{padding:'4px 6px 4px 0',border:'none',background:'none',color:C.rose,fontSize:16,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>‹ Notes</button>}
               {headerEditing ? (
                 <input autoFocus value={headerTitle} onChange={e=>setHeaderTitle(e.target.value)}
                   onKeyDown={e=>{if(e.key==='Enter')saveHeaderTitle();if(e.key==='Escape')setHeaderEditing(false);}}
@@ -12164,62 +12228,82 @@ const FloatingChat = () => {
 
 /* ── Mobile navigation ─────────────────────────────────────────────── */
 const PRIMARY_NAV = ['home','calendar','tasks','lists'];
+// More: every other section as an iPhone-style grouped list (the way Settings looks).
 const MobileMoreMenu = ({ activeNav, onNavSelect, onClose }) => {
-  const extras = NAV.filter(n => !PRIMARY_NAV.includes(n.id));
+  const groups = [...NAV_GROUPS, ['settings']].map(g => g.filter(id => !PRIMARY_NAV.includes(id))).filter(g => g.length);
   return (
-    <div style={{ position:'fixed', inset:0, zIndex:200, background:'rgba(30,12,24,0.35)', backdropFilter:'blur(3px)' }} onClick={onClose}>
-      <div className="sheet-up" style={{ position:'absolute', bottom:0, left:0, right:0, background:C.cream, borderRadius:'26px 26px 0 0', padding:'12px 16px calc(84px + env(safe-area-inset-bottom,0px))', boxShadow:'0 -10px 40px rgba(0,0,0,0.18)' }}
+    <div style={{ position:'fixed', inset:0, zIndex:200, background:'rgba(30,12,24,0.32)' }} onClick={onClose}>
+      <div className="sheet-up" style={{ position:'absolute', bottom:0, left:0, right:0, maxHeight:'86vh', overflowY:'auto', background: _dk ? '#1a1320' : '#f7f0f3', borderRadius:'24px 24px 0 0', padding:'8px 16px calc(100px + env(safe-area-inset-bottom,0px))', boxShadow:'0 -10px 40px rgba(0,0,0,0.18)' }}
         onClick={e=>e.stopPropagation()}>
-        <div style={{ width:40, height:4, borderRadius:2, background:C.border, margin:'0 auto 16px' }} />
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
-          {extras.map(item => {
-            const active = activeNav===item.id;
-            return (
-              <button key={item.id} onClick={()=>{ onNavSelect(item.id); onClose(); }} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:7,
-                background: active ? (_dk ? `${C.rose}33` : `linear-gradient(145deg, ${C.pink}, ${C.lavLight})`) : C.card, border:`0.5px solid ${active ? C.rose+'60' : C.border}`, borderRadius:18, padding:'14px 6px', cursor:'pointer' }}>
-                <Ico d={icons[item.id]} size={22} active={active} />
-                <span style={{ fontSize:10.5, color: active ? C.rose : C.textLight, fontWeight: active?600:400, textAlign:'center', lineHeight:1.2 }}>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        <div style={{ width:36, height:5, borderRadius:3, background:C.border, margin:'0 auto 12px' }} />
+        <div style={{ fontFamily:"'DM Serif Display',serif", fontSize:26, color:C.rose, margin:'0 4px 14px' }}>More</div>
+        {groups.map((g, gi) => (
+          <div key={gi} style={{ background:C.card, borderRadius:14, overflow:'hidden', marginBottom:18 }}>
+            {g.map((id, i) => {
+              const item = NAV.find(n => n.id === id); if (!item) return null;
+              const active = activeNav === id;
+              return (
+                <button key={id} onClick={()=>{ onNavSelect(id); onClose(); }} style={{ width:'100%', display:'flex', alignItems:'center', gap:12, padding:'0 14px', minHeight:50, background: active ? `${C.rose}10` : 'transparent', border:'none', cursor:'pointer', fontFamily:'inherit', textAlign:'left' }}>
+                  <span style={{ width:30, height:30, borderRadius:8, display:'grid', placeItems:'center', flexShrink:0, background: _dk ? `${C.rose}30` : `linear-gradient(145deg, ${C.pink}, ${C.lavLight})` }}><Ico d={icons[id]} size={17} active /></span>
+                  <span style={{ flex:1, alignSelf:'stretch', display:'flex', alignItems:'center', gap:8, borderBottom: i < g.length-1 ? `0.5px solid ${C.border}` : 'none', marginRight:-14, paddingRight:14 }}>
+                    <span style={{ flex:1, fontSize:16, color: active ? C.rose : C.text, fontWeight: active ? 600 : 400 }}>{item.label}</span>
+                    <span style={{ color:C.textMuted, fontSize:18, lineHeight:1 }}>›</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </div>
     </div>
   );
 };
 
+// The phone's tab bar floats above the page on frosted glass, like iPhone apps.
 const MobileBottomNav = ({ activeNav, onNavSelect }) => {
   const [showMore, setShowMore] = useState(false);
+  // The + button steps aside while the More list is open.
+  useEffect(() => { document.body.classList.toggle('more-open', showMore); }, [showMore]);
   const isInMore = !PRIMARY_NAV.includes(activeNav);
   const btn = (key, label, icon, active, onClick) => (
-    <button key={key} onClick={onClick} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:3, background:'none', border:'none', cursor:'pointer', padding:'6px 4px', flex:1, position:'relative' }}>
-      <span style={{ width:44, height:28, borderRadius:14, display:'grid', placeItems:'center', background: active?(_dk?`${C.rose}33`:C.pink):'transparent', transition:'background .18s' }}><Ico d={icons[icon]} size={20} active={active} /></span>
-      <span style={{ fontSize:10, color: active ? C.rose : C.textMuted, fontWeight: active?600:400 }}>{label}</span>
+    <button key={key} onClick={onClick} aria-current={active?'page':undefined} style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2, background: active ? (_dk ? `${C.rose}30` : `${C.rose}14`) : 'transparent', border:'none', cursor:'pointer', height:52, borderRadius:20, flex:1, minWidth:0, fontFamily:'inherit', transition:'background .18s' }}>
+      <Ico d={icons[icon]} size={21} active={active} />
+      <span style={{ fontSize:10.5, color: active ? C.rose : C.textLight, fontWeight: active?600:500, maxWidth:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', padding:'0 2px' }}>{label}</span>
     </button>
   );
   const activeMoreItem = isInMore ? NAV.find(n=>n.id===activeNav) : null;
+  const short = { lists:'Lists' };
   return (
     <>
       {showMore && <MobileMoreMenu activeNav={activeNav} onNavSelect={onNavSelect} onClose={()=>setShowMore(false)} />}
-      <div style={{ background: _dk?'rgba(35,24,32,.94)':'rgba(250,243,247,.94)', backdropFilter:'blur(12px)', WebkitBackdropFilter:'blur(12px)', borderTop:`0.5px solid ${C.border}`,
-        display:'flex', alignItems:'center', flexShrink:0, zIndex:210, padding:'4px 6px calc(4px + env(safe-area-inset-bottom,0px))' }}>
-        {PRIMARY_NAV.map(id => btn(id, NAV.find(n=>n.id===id)?.label, id, activeNav===id && !showMore, ()=>{ onNavSelect(id); setShowMore(false); }))}
+      <nav aria-label="Sections" style={{ position:'fixed', left:12, right:12, bottom:'calc(10px + env(safe-area-inset-bottom,0px))', zIndex:210, display:'flex', alignItems:'center', gap:2, padding:5, borderRadius:27,
+        background: _dk?'rgba(38,27,36,.72)':'rgba(255,252,253,.72)', backdropFilter:'saturate(1.8) blur(22px)', WebkitBackdropFilter:'saturate(1.8) blur(22px)',
+        border:`0.5px solid ${_dk?'rgba(255,255,255,.1)':'rgba(255,255,255,.9)'}`, boxShadow: _dk ? '0 10px 30px rgba(0,0,0,.45)' : `0 10px 30px rgba(64,24,40,.13), 0 1px 2px rgba(64,24,40,.06)` }}>
+        {PRIMARY_NAV.map(id => btn(id, short[id] || NAV.find(n=>n.id===id)?.label, id, activeNav===id && !showMore, ()=>{ onNavSelect(id); setShowMore(false); }))}
         {btn('more', activeMoreItem ? activeMoreItem.label : 'More', activeMoreItem?.id||'settings', showMore||isInMore, ()=>setShowMore(s=>!s))}
-      </div>
+      </nav>
     </>
   );
 };
 
+// A page's own pages, as a row of capsules (phones, and the icons-only sidebar on a computer).
 const MobileSubTabs = ({ navItem, activeSub, onSubSelect }) => {
+  const isMobile = useIsMobile();
+  const rowRef = useRef(null);
+  // Keep the chosen capsule in view (it can sit past the edge, e.g. Projects under Tasks).
+  useEffect(() => {
+    const row = rowRef.current, on = row && row.querySelector('[aria-pressed="true"]');
+    if (on) row.scrollLeft = Math.max(0, on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2);
+  }, [activeSub, navItem && navItem.id]);
   if (!navItem || !navItem.sub || navItem.sub.length <= 1) return null;
   return (
-    <div style={{ display:'flex', gap:6, overflowX:'auto', paddingBottom:10, marginBottom:6, scrollbarWidth:'none', WebkitOverflowScrolling:'touch' }}>
+    <div ref={rowRef} className="no-scrollbar" style={{ position:'relative', display:'flex', gap:6, overflowX:'auto', margin: isMobile ? '0 -14px 14px' : '0 0 18px', padding: isMobile ? '2px 14px 4px' : '2px 0 4px', WebkitOverflowScrolling:'touch' }}>
       {navItem.sub.map(s => {
-        const badge = navBadge(navItem.id, s);
+        const badge = navBadge(navItem.id, s); const on = activeSub===s;
         return (
-          <button key={s} onClick={()=>onSubSelect(s)} style={{ padding:'7px 14px', borderRadius:20, border:`0.5px solid ${activeSub===s ? C.rose : C.border}`, flexShrink:0,
-            background: activeSub===s ? `linear-gradient(135deg, ${C.rose}, ${C.roseDark})` : C.card, color: activeSub===s ? '#fff' : C.text,
-            fontSize:12.5, fontWeight: activeSub===s ? 600 : 400, cursor:'pointer', whiteSpace:'nowrap' }}>{s==='Recently Deleted'?'🗑':s}{badge?` · ${badge.n}`:''}</button>
+          <button key={s} onClick={()=>onSubSelect(s)} aria-pressed={on} style={{ height:34, padding:'0 14px', borderRadius:17, border:'none', flexShrink:0, fontFamily:'inherit',
+            background: on ? C.rose : (_dk ? 'rgba(255,255,255,.07)' : `${C.rose}0f`), color: on ? '#fff' : C.text,
+            fontSize:14, fontWeight: on ? 600 : 400, cursor:'pointer', whiteSpace:'nowrap', transition:'background .15s' }}>{s==='Recently Deleted'?'🗑 Deleted':s}{badge?<span style={{ opacity:.7, marginLeft:5 }}>{badge.n}</span>:null}</button>
         );
       })}
     </div>
@@ -12274,7 +12358,10 @@ const QuickAdd = ({ variant='bar' }) => {
   ];
   const isFab = variant==='fab';
   const panel = open && (
-    <div className="fade-in" style={{ position:'absolute', ...(isFab ? { bottom:62, right:0 } : { top:44, right:0 }), width: mode==='ai'?340:290, background:C.cream, border:`0.5px solid ${C.border}`, borderRadius:18, boxShadow:'0 18px 50px rgba(0,0,0,.18)', padding:8, zIndex:400 }}>
+    <div className={isFab ? 'sheet-up' : 'fade-in'} style={isFab
+      ? { position:'fixed', left:0, right:0, bottom:0, maxHeight:'82vh', overflowY:'auto', background:C.cream, borderRadius:'24px 24px 0 0', boxShadow:'0 -10px 40px rgba(0,0,0,.18)', padding:'8px 12px calc(16px + env(safe-area-inset-bottom,0px))', zIndex:400 }
+      : { position:'absolute', top:44, right:0, width: mode==='ai'?340:290, background:C.cream, border:`0.5px solid ${C.border}`, borderRadius:18, boxShadow:'0 18px 50px rgba(0,0,0,.18)', padding:8, zIndex:400 }}>
+      {isFab && <div style={{ width:36, height:5, borderRadius:3, background:C.border, margin:'0 auto 10px' }}/>}
       {!mode && typeof SmartAddBox==='function' && <SmartAddBox onDone={close}/>}
       {!mode ? actions.map(a=>(
         <button key={a.key} onClick={()=>setMode(a.key)} style={{ width:'100%', display:'flex', alignItems:'center', gap:11, padding:'9px 10px', borderRadius:12, border:'none', background:'transparent', cursor:'pointer', textAlign:'left' }}
@@ -12305,7 +12392,8 @@ const QuickAdd = ({ variant='bar' }) => {
     </div>
   );
   if (isFab) return (
-    <div ref={ref} style={{ position:'fixed', right:16, bottom:'calc(78px + env(safe-area-inset-bottom,0px))', zIndex:220 }}>
+    <div ref={ref} className="qa-fab" style={{ position:'fixed', right:16, bottom:'calc(84px + env(safe-area-inset-bottom,0px))', zIndex:220 }}>
+      {open && <div onClick={close} style={{ position:'fixed', inset:0, background:'rgba(30,12,24,0.32)', zIndex:399 }}/>}
       {panel}
       <button onClick={()=>open?close():setOpen(true)} aria-label="Quick add" style={{ width:54, height:54, borderRadius:'50%', border:'none', background:`linear-gradient(135deg, ${C.rose}, ${C.accent})`, color:'#fff', fontSize:26, cursor:'pointer',
         boxShadow:`0 10px 26px ${C.rose}66`, transition:'transform .2s', transform: open?'rotate(45deg)':'none' }}>+</button>
@@ -12337,10 +12425,10 @@ const App = () => {
     window._remountOnDataChange = true;
     return () => { window.removeEventListener('nyla:data-changed', onData); window._remountOnDataChange = false; };
   }, []);
-  const [secCollapsed, setSecCollapsed] = useState(() => window.innerWidth < 700);
-
-  // Auto-collapse secondary sidebar when switching to mobile
-  useEffect(() => { if (isMobile) setSecCollapsed(true); }, [isMobile]);
+  const [railLabels, toggleRailLabels] = useRailLabels();
+  // The top bar turns into a frosted bar with a hairline once the page scrolls under it.
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => { setScrolled(false); }, [activeNav, activeSub]);
 
   // Global cross-section navigation bridge (e.g. "Open Notebook Page" from an Idea Bank card)
   useEffect(() => {
@@ -12370,23 +12458,22 @@ const App = () => {
       if(_ap.wallpaper&&WALLPAPERS[_ap.wallpaper]) return WALLPAPERS[_ap.wallpaper];
       return C.cream;
     })() }}>
-      <TopBar activeNav={activeNav} activeSub={activeSub} />
       <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
         {!isMobile && (
-          <LeftSidebar activeNav={activeNav} onNavSelect={handleNavSelect}
-            secCollapsed={secCollapsed} onToggleSec={()=>setSecCollapsed(c=>!c)} />
+          <LeftSidebar activeNav={activeNav} onNavSelect={handleNavSelect} activeSub={activeSub} onSubSelect={setActiveSub}
+            labels={railLabels} onToggleLabels={toggleRailLabels} />
         )}
-        {!isMobile && !isFullWidth && (
-          <SecondarySidebar navItem={navItem} activeSub={activeSub} onSubSelect={setActiveSub}
-            collapsed={secCollapsed} />
-        )}
-        <main key={activeNav} style={{ flex:1, overflowY:'auto', padding: mainPadding, background:C.cream,
-          overflow: isNotebook ? 'hidden' : 'auto', paddingBottom: isMobile && !isNotebook ? 96 : undefined }}>
-          {isMobile && !isNotebook && (
+        <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <TopBar activeNav={activeNav} activeSub={activeSub} scrolled={scrolled || isNotebook} />
+        <main key={activeNav} onScroll={e=>{ const s = e.currentTarget.scrollTop > 6; if (s !== scrolled) setScrolled(s); }}
+          style={{ flex:1, overflowY:'auto', padding: mainPadding, background:C.cream,
+          overflow: isNotebook ? 'hidden' : 'auto', paddingBottom: isMobile && !isNotebook ? 'calc(112px + env(safe-area-inset-bottom,0px))' : undefined }}>
+          {(isMobile || !railLabels) && !isNotebook && (
             <MobileSubTabs navItem={navItem} activeSub={activeSub} onSubSelect={setActiveSub} />
           )}
           <MainContent navId={activeNav} sub={activeSub} rev={dataRev} />
         </main>
+        </div>
       </div>
       {isMobile && <MobileBottomNav activeNav={activeNav} onNavSelect={handleNavSelect} />}
       {isMobile && <QuickAdd variant="fab" />}
