@@ -9,8 +9,8 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const TOOLS = '/private/tmp/claude-501/-Users-nylabrown-claude/d3909289-f083-422d-b80d-d42bb09e0983/scratchpad/tools/';
-const A = createRequire(TOOLS)('astronomy-engine');
+// astronomy-engine 2.1.19, the same build the app loads from jsDelivr, kept beside the tests.
+const A = createRequire(import.meta.url)('./vendor/astronomy-engine-2.1.19.min.js');
 
 const win = {};
 new Function('window', readFileSync(join(here, '..', 'js', 'cosmic-timing-core.js'), 'utf8'))(win);

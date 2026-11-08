@@ -59,6 +59,8 @@
   <script src="js/safety.js"></script>
   <!-- The sums behind Cosmic > Timing: moon phases, stations, ingresses, best days. -->
   <script src="js/cosmic-timing-core.js"></script>
+  <script src="js/money-sky-core.js"></script>
+  <script src="js/money-sky-view.js"></script>
   <!-- Firebase (cross-device sync) -->
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -201,6 +203,7 @@
 <script type="text/nyla-jsx" src="js/people.jsx"></script>
 <script type="text/nyla-jsx" src="js/patterns.jsx"></script>
 <script type="text/nyla-jsx" src="js/cosmic-timing.jsx"></script>
+<script type="text/nyla-jsx" src="js/money-sky.jsx"></script>
 <script type="text/nyla-jsx" src="js/close-day.jsx"></script>
 <script type="text/nyla-jsx" src="js/safety-panel.jsx"></script>
 <!-- Every text/nyla-jsx script (the modules above and the main script below) is run by js/boot.js:
@@ -1586,7 +1589,7 @@ const NAV = [
   { id:'notebook',   label:'Notebook',   sub:[] },
   { id:'vault',      label:'Second Brain', sub:['Browse','Search','In AI Context','Settings'] },
   { id:'goals',      label:'Goals',      sub:['Overview','Yearly','Quarterly','Monthly','Dream Life','Recently Deleted'] },
-  { id:'cosmic',     label:'Cosmic',     sub:['Overview','Timing','Astrology','Human Design','Numerology','Matrix of Destiny','Astrocartography'] },
+  { id:'cosmic',     label:'Cosmic',     sub:['Overview','Timing','Financial Astrology','Astrology','Human Design','Numerology','Matrix of Destiny','Astrocartography'] },
   { id:'agents',     label:'AI Agents',  sub:['My Agents'] },
   { id:'settings',   label:'Settings',   sub:['Profile','AI Connection','Chat History','Appearance','Customize Names','Notifications','Backup & Restore'] },
 ];
@@ -8473,6 +8476,7 @@ const CosmicOverview = () => {
     { sub:'Human Design', icon:'◈', title:'Manifesting Generator · 3/5', text:'Sacral authority. Strategy: respond, then inform. Right Angle Cross of the Sleeping Phoenix.' },
     { sub:'Numerology', icon:'✧', title:'Life Path 5 · Expression 8', text:`Soul Urge 6 · Personality 2 · Personal Year ${getPersonalYear(yr)} in ${yr}.` },
     { sub:'Matrix of Destiny', icon:'✴', title:'Center 10 · Wheel of Fortune', text:'Karmic tail 15-20-5. Heart line 20, money line 22.' },
+    { sub:'Financial Astrology', icon:'💸', title:`Money timing · Personal Year ${getPersonalYear(yr)}`, text:'Best days to launch, sell, sign and do the books, money hours today, your money houses and big cycles.' },
     { sub:'Astrocartography', icon:'🌍', title:'Where your planets rise', text:'Your Venus, Jupiter and Sun lines on a world map, with the cities they cross.' },
   ];
   return (
@@ -11759,7 +11763,7 @@ const MainContent = ({ navId, sub, rev=0 }) => (
     {navId==='vault'      && <SecondBrainPanel sub={sub} />}
     {navId==='goals'      && <GoalsPanel sub={sub} />}
     {navId==='social'     && <SocialMediaPanel sub={sub} />}
-    {navId==='cosmic'     && (sub==='Timing' ? <CosmicTiming/> : <CosmicPanel sub={sub} />)}
+    {navId==='cosmic'     && (sub==='Timing' ? <CosmicTiming/> : sub==='Financial Astrology' ? <MoneySkyPage/> : <CosmicPanel sub={sub} />)}
     {navId==='reflect'    && (sub==='Weekly Review' ? <WeeklyReview/> : sub==='Patterns' ? <PatternsPage/> : <CloseDayPage/>)}
     {navId==='people'     && <PeoplePanel sub={sub} />}
     {/* University was removed from the nav; UniversityPanel is kept in the file but not routed. */}
