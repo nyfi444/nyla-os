@@ -17,6 +17,7 @@ const MoneySkyPage = () => {
     const h = window.moneySkyView.mount(ref.current, {
       loadAstronomy,
       names: [{ label: 'Semester HQ', name: 'Semester HQ' }, { label: 'Business OS', name: 'Business OS' }],
+      businesses: ['semesterhq', 'businessos'],
       showTitle: false,
     });
     return () => h.destroy();

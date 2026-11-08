@@ -6,6 +6,7 @@
      moneySkyView.mount(el, {
        loadAstronomy: () => Promise<Astronomy>,
        names: [{ label, name }],   // business names for the name numbers
+       businesses: ['semesterhq'], // business charts to show (ids in moneySky.BUSINESSES)
        context: 'Semester HQ',     // a word under the title, optional
        showTitle: true
      }) → { destroy }
@@ -72,7 +73,10 @@ button.msk-chip{cursor:pointer;font:inherit;font-size:12.5px;color:var(--_ink);p
   function mount(el, opts) {
     opts = opts || {};
     var S = window.moneySky, P = S.PROFILE, A = null, dead = false;
-    var st = { tab: get('tab', 'today'), purpose: get('purpose', 'ask'), sel: null, moneyOnly: get('moneyOnly', true), place: get('place', 'raleigh') };
+    var BIZ = (opts.businesses || []).map(function (id) { return S.BUSINESSES.filter(function (b) { return b.id === id; })[0]; }).filter(Boolean);
+    var tabs = TABS.slice(0, 3).concat(BIZ.length ? [['business', BIZ.length > 1 ? 'Business charts' : 'Business chart']] : [], TABS.slice(3));
+    var st = { tab: get('tab', 'today'), biz: get('biz', BIZ.length ? BIZ[0].id : null), purpose: get('purpose', 'ask'), sel: null, moneyOnly: get('moneyOnly', true), place: get('place', 'raleigh') };
+    if (!tabs.some(function (t) { return t[0] === st.tab; })) st.tab = 'today';
     if (!document.getElementById('msk-style')) { var s = document.createElement('style'); s.id = 'msk-style'; s.textContent = CSS; document.head.appendChild(s); }
     el.innerHTML = '<div class="msk"><div class="msk-load">Reading the sky…</div></div>';
     var root = el.firstChild;
@@ -192,6 +196,28 @@ button.msk-chip{cursor:pointer;font:inherit;font-size:12.5px;color:var(--_ink);p
       return hl + houses + cycles + hdHtml + '<div class="msk-sm msk-mu" style="margin-top:8px">Born ' + esc(P.born.local) + ', ' + esc(P.born.place) + '. Tropical zodiac, Placidus houses, Swiss Ephemeris positions (the same chart as Nyla OS).</div>';
     }
 
+    // ── Business charts ──
+    function tabBusiness(c) {
+      var spec = BIZ.filter(function (b) { return b.id === st.biz; })[0] || BIZ[0];
+      c.biz = c.biz || {};
+      var r = c.biz[spec.id] || (c.biz[spec.id] = S.businessReading(A, spec, P, Date.now())), M = S.NUM_MONEY;
+      var html = BIZ.length > 1 ? '<div class="msk-chips" style="margin-bottom:12px">' + BIZ.map(function (b) { return '<button class="msk-chip' + (b.id === spec.id ? ' on' : '') + '" data-msk-biz="' + b.id + '">' + esc(b.name) + '</button>'; }).join('') + '</div>' : '';
+      html += '<div class="msk-card msk-hero"><div class="msk-big">' + esc(spec.name) + (spec.provisional ? ' <span class="msk-chip" style="font-size:11px;font-weight:500">Provisional</span>' : '') + '</div>'
+        + '<div class="msk-chips" style="margin:4px 0 8px"><span class="msk-chip">☉ ' + esc(r.big.sun) + ' Sun</span><span class="msk-chip">☽ ' + esc(r.big.moon) + ' Moon</span><span class="msk-chip">↑ ' + esc(r.big.rising) + ' rising</span><span class="msk-chip">Life path ' + r.numbers.lifePath + '</span></div>'
+        + '<div class="msk-sm">Born ' + esc(spec.local) + ', ' + esc(spec.place) + '. ' + esc(spec.source) + '</div><div class="msk-mu msk-sm" style="margin-top:4px">Rising ' + esc(r.asc) + ' · Midheaven ' + esc(r.mc) + ' · Placidus houses, the same system as your own chart.</div></div>';
+      html += '<div class="msk-grid" style="margin-bottom:12px">' + r.reads.map(function (x) { return '<div class="msk-card"><h3>' + esc(x.emoji) + ' ' + esc(x.title) + '</h3><div>' + esc(x.text) + '</div></div>'; }).join('') + '</div>';
+      var row = function (x) { return '<div class="msk-row"><span class="msk-ic msk-tone-' + x.tone + '">' + (x.tone === 'easy' ? '▲' : x.tone === 'hard' ? '▼' : '◆') + '</span><div class="msk-main"><b>' + esc(x.title) + '</b><div class="msk-mu msk-sm">' + esc(x.text) + '</div></div><div class="msk-side">' + x.orb + '°</div></div>'; };
+      html += '<div class="msk-grid" style="margin-bottom:12px"><div class="msk-card"><h3>How it fits with you <small>its chart against yours</small></h3>' + (r.withYou.length ? r.withYou.map(row).join('') : '<div class="msk-mu">No close contacts between the two charts.</div>') + '</div>'
+        + '<div class="msk-card"><h3>Touching its chart now</h3>' + (r.transits.length ? r.transits.map(function (x) { return row({ tone: x.tone, title: x.title, text: x.text, orb: x.orb + '' }); }).join('') : '<div class="msk-mu">No slow planet is touching its money points right now.</div>') + '</div></div>';
+      html += '<div class="msk-grid" style="margin-bottom:12px">' + r.cycles.map(function (b) {
+        return '<div class="msk-card"><h3>' + b.glyph + ' ' + esc(b.planet) + ' through its chart</h3><div class="msk-big" style="font-size:15px">Now in its ' + S.util.ordinal(b.house) + ' house · ' + esc(b.houseName) + '</div>' + (b.now ? '<div style="margin-top:6px">' + esc(b.now) + '</div>' : '')
+          + '<div style="margin-top:8px">' + b.nextMoney.filter(function (x) { return x.now || x.at; }).map(function (x) { return '<div class="msk-row"><span class="msk-ic msk-money">' + x.house + '</span><div class="msk-main"><b>' + esc(x.houseName) + '</b> ' + (x.now ? '<span class="msk-money">now</span>' : 'from ' + esc(dyY(x.at))) + '<div class="msk-mu msk-sm">' + esc(x.text || '') + '</div></div></div>'; }).join('') + '</div></div>';
+      }).join('')
+        + '<div class="msk-card"><h3>Its numbers</h3>' + [['Life path', r.numbers.lifePath, 'year'], ['Its ' + r.numbers.year + ' year', r.numbers.personalYear, 'year'], ['Its ' + (r.numbers.year + 1) + ' year', r.numbers.nextYear, 'year'], ['Name number', r.numbers.name, 'year']].map(function (n) { return '<div class="msk-row"><span class="msk-ic msk-money">' + n[1] + '</span><div class="msk-main"><b>' + esc(n[0]) + '</b> · ' + esc(M[n[1]] ? M[n[1]].name : '') + '<div class="msk-mu msk-sm">' + esc(M[n[1]] ? M[n[1]][n[2]] : '') + '</div></div></div>'; }).join('') + '<div class="msk-sm msk-mu" style="margin-top:6px">From its birth date, the same way as yours.</div></div></div>';
+      html += '<div class="msk-card"><h3>Its planets</h3><div class="msk-wrap"><table class="msk-table"><tr><th></th><th>Where</th><th>Its house</th></tr>' + r.planets.map(function (p) { return '<tr><td>' + p.glyph + ' ' + esc(p.name) + '</td><td>' + esc(p.pos) + (p.rx ? '<span class="msk-rx">R</span>' : '') + '</td><td>' + S.util.ordinal(p.house) + ' · ' + esc(p.houseName) + '</td></tr>'; }).join('') + '</table></div></div>';
+      return html;
+    }
+
     // ── Numbers ──
     function tabNumbers() {
       var n = S.numbers(P, Date.now(), opts.names), M = S.NUM_MONEY, mx = S.matrix(P);
@@ -214,19 +240,20 @@ button.msk-chip{cursor:pointer;font:inherit;font-size:12.5px;color:var(--_ink);p
     function draw() {
       if (dead) return;
       var c = data(), body;
-      try { body = st.tab === 'calendar' ? tabCalendar(c) : st.tab === 'map' ? tabMap(c) : st.tab === 'numbers' ? tabNumbers(c) : tabToday(c); }
+      try { body = st.tab === 'calendar' ? tabCalendar(c) : st.tab === 'map' ? tabMap(c) : st.tab === 'numbers' ? tabNumbers(c) : st.tab === 'business' && BIZ.length ? tabBusiness(c) : tabToday(c); }
       catch (e) { body = '<div class="msk-card">Something went wrong drawing this tab: ' + esc(e && e.message) + '</div>'; if (window.console) console.error(e); }
       var y = window.scrollY;
       root.innerHTML = (opts.showTitle === false ? '' : '<div class="msk-head"><div><div class="msk-title">Financial Astrology</div><div class="msk-sub">Money timing from your own chart' + (opts.context ? ' · ' + esc(opts.context) : '') + '</div></div></div>')
-        + '<div class="msk-tabs" role="tablist">' + TABS.map(function (t) { return '<button class="msk-tab' + (st.tab === t[0] ? ' on' : '') + '" role="tab" data-msk-tab="' + t[0] + '">' + esc(t[1]) + '</button>'; }).join('') + '</div>'
+        + '<div class="msk-tabs" role="tablist">' + tabs.map(function (t) { return '<button class="msk-tab' + (st.tab === t[0] ? ' on' : '') + '" role="tab" data-msk-tab="' + t[0] + '">' + esc(t[1]) + '</button>'; }).join('') + '</div>'
         + body
         + '<details class="msk-how"><summary>How this is worked out</summary><div class="msk-card" style="margin-top:8px">' + S.RULES.map(function (r) { return '<div class="msk-row"><span class="msk-ic">' + esc(r.emoji) + '</span><div class="msk-main"><b>' + esc(r.title) + '</b><div class="msk-sm">' + esc(r.text) + '</div></div></div>'; }).join('') + '<div class="msk-sm msk-mu" style="margin-top:8px">Positions come from astronomy-engine and your Swiss Ephemeris chart. This is for timing and reflection, not financial advice: your real numbers, your contracts and your gut come first.</div></div></details>';
       if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y);
     }
 
     function onClick(e) {
-      var t = e.target.closest && e.target.closest('[data-msk-tab],[data-msk-purpose],[data-msk-day],[data-msk-here]'); if (!t || !root.contains(t)) return;
+      var t = e.target.closest && e.target.closest('[data-msk-tab],[data-msk-purpose],[data-msk-day],[data-msk-here],[data-msk-biz]'); if (!t || !root.contains(t)) return;
       if (t.dataset.mskTab) { st.tab = t.dataset.mskTab; put('tab', st.tab); draw(); }
+      else if (t.dataset.mskBiz) { st.biz = t.dataset.mskBiz; put('biz', st.biz); draw(); }
       else if (t.dataset.mskPurpose) { st.purpose = t.dataset.mskPurpose; put('purpose', st.purpose); draw(); }
       else if (t.dataset.mskDay) { st.sel = t.dataset.mskDay; if (st.tab !== 'calendar') { st.tab = 'calendar'; put('tab', 'calendar'); } draw(); }
       else if (t.hasAttribute('data-msk-here')) {

@@ -147,3 +147,28 @@ test('Business OS copies match this source (when the sibling repos are on this M
     }
   }
 });
+
+test('the chart maker rebuilds her own chart: Placidus cusps, rising and Midheaven match the Swiss Ephemeris', () => {
+  const c = S.chartFor(A, { utc: NATAL.utc, lat: NATAL.lat, lng: NATAL.lon, born: S.PROFILE.born });
+  close(c.asc, NATAL.asc, 0.01, 'rising'); close(c.mc, NATAL.mc, 0.01, 'Midheaven');
+  c.cusps.forEach((x, i) => close(Math.abs(S.util.norm180(x - NATAL.cusps[i])), 0, 0.01, `cusp ${i + 1}`));
+  NATAL.planets.filter(p => !['North Node', 'Lilith'].includes(p.name)).forEach(p => close(Math.abs(S.util.norm180(c.planets[p.name] - p.lon)), 0, 0.01, p.name));
+});
+
+test('business charts: Semester HQ from its filing stamp, Business OS provisional from its first build', () => {
+  const shq = S.BUSINESSES.find(b => b.id === 'semesterhq'), bos = S.BUSINESSES.find(b => b.id === 'businessos');
+  // NC Secretary of State stamp: Date Filed 9/15/2026 3:01:00 PM (Eastern daylight time).
+  assert.equal(shq.utc, '2026-09-15T19:01:00Z'); assert.equal(shq.provisional, false);
+  // The maison-os folder was created Oct 25, 2026 at 7:39:22 PM (Eastern daylight time).
+  assert.equal(bos.utc, '2026-10-25T23:39:22Z'); assert.equal(bos.provisional, true);
+  const when = Date.parse('2026-11-07T20:00:00-05:00');
+  const r = S.businessReading(A, shq, null, when);
+  assert.deepEqual(r.big, { sun: 'Virgo', moon: 'Scorpio', rising: 'Capricorn' });
+  assert.equal(r.numbers.name, 3); assert.equal(r.numbers.lifePath, 7);
+  assert.ok(r.reads.every(x => !/\byour\b/i.test(x.text)), 'business readings say "its", never "your"');
+  assert.ok(r.transits.every(x => !/\byour\b/.test(x.title + x.text)));
+  const b = S.businessReading(A, bos, null, when);
+  assert.deepEqual(b.big, { sun: 'Scorpio', moon: 'Taurus', rising: 'Taurus' });
+  assert.equal(b.numbers.name, 7);
+  for (const x of [...r.withYou, ...b.withYou]) assert.ok(x.orb <= 3);
+});

@@ -72,7 +72,7 @@
   var HOUSE_NAME = { 1: 'Self', 2: 'Income', 3: 'Marketing', 4: 'Foundations', 5: 'Creative ventures', 6: 'Daily work', 7: 'Partners', 8: 'Shared money', 9: 'Education and vision', 10: 'Career', 11: 'Community', 12: 'Behind the scenes' };
   var HOUSE_THEME = {
     1: 'you, your image and fresh starts', 2: 'your own income, your prices and what you value', 3: 'marketing, writing and local networks',
-    4: 'your home base, foundations and what you own', 5: 'creative ventures, risk, and students and young people', 6: 'daily work, systems, service and health',
+    4: 'your home base, foundations and ownership', 5: 'creative ventures, risk, and students and young people', 6: 'daily work, systems, service and health',
     7: 'clients and partners one to one, and contracts', 8: "other people's money: investors, loans, payouts and taxes", 9: 'education, publishing, travel and the big vision',
     10: 'career, reputation and the public face of the business', 11: 'community, networks and income from groups', 12: 'behind the scenes: rest, endings and hidden costs'
   };
@@ -518,14 +518,111 @@
     { emoji: '📅', title: 'Weekday rulers', text: 'Thursday is Jupiter’s day, Friday is Venus’s, Wednesday is Mercury’s, Saturday is Saturn’s.' }
   ];
 
+  // ── Business charts ──────────────────────────────────────────────────
+  /* Each business is charted for the moment it was born. Semester HQ: the
+     state's filing stamp on its Articles of Organization. Business OS: no LLC
+     yet (Nov 7 2026), so Nyla chose the first build of the product, the moment
+     the project folder was created on her Mac; swap in the filing stamp when
+     the company is formed and drop provisional. */
+  var BUSINESSES = [
+    { id: 'semesterhq', name: 'Semester HQ', legal: 'Semester HQ, LLC', utc: '2026-09-15T19:01:00Z', local: 'September 15, 2026, 3:01 PM EDT', place: 'Raleigh, NC', lat: 35.7796, lng: -78.6382, born: { y: 2026, m: 9, d: 15 },
+      source: 'The state’s filing stamp on its Articles of Organization (North Carolina Secretary of State, Sept 15, 2026, 3:01:00 PM).', provisional: false },
+    { id: 'businessos', name: 'Business OS', legal: 'Business OS', utc: '2026-10-25T23:39:22Z', local: 'October 25, 2026, 7:39 PM EDT', place: 'Raleigh, NC', lat: 35.7796, lng: -78.6382, born: { y: 2026, m: 10, d: 25 },
+      source: 'The first build of the product on your Mac: the project folder was created Oct 25, 2026 at 7:39 PM. Provisional until the company is formed; then its LLC filing stamp takes over.', provisional: true }
+  ];
+  function obliquity(A, time) { try { if (A.e_tilt) return A.e_tilt(time).tobl; } catch (e) { /* older build */ } return 23.439291 - 0.0130042 * (time.tt / 36525); }
+  /* Placidus, the house system her own chart uses: the 11th and 12th cusps
+     sit a third and two thirds of the way along a degree's daytime arc from the
+     Midheaven, the 2nd and 3rd along its night arc from the Ascendant. Each
+     cusp is found by iterating, since the arc depends on the cusp itself. */
+  function placidus(ramc, eps, lat) {
+    var r = Math.PI / 180, sin = function (x) { return Math.sin(x * r); }, cos = function (x) { return Math.cos(x * r); }, tan = function (x) { return Math.tan(x * r); };
+    var deg = function (x) { return x / r; };
+    var raToLon = function (ra) { return norm360(deg(Math.atan2(sin(ra), cos(ra) * cos(eps)))); };
+    var mc = raToLon(ramc);
+    var asc = norm360(deg(Math.atan2(cos(ramc), -(sin(ramc) * cos(eps) + tan(lat) * sin(eps)))));
+    function cusp(f, above) {
+      var ra = above ? ramc + f * 90 : ramc + 180 - f * 90;
+      for (var i = 0; i < 60; i++) {
+        var l = raToLon(ra), dec = deg(Math.asin(sin(eps) * sin(l))), x = Math.max(-1, Math.min(1, tan(lat) * tan(dec)));
+        var dsa = 90 + deg(Math.asin(x)), next = above ? ramc + f * dsa : ramc + 180 - f * (180 - dsa);
+        if (Math.abs(norm180(next - ra)) < 1e-8) { ra = next; break; }
+        ra = next;
+      }
+      return raToLon(ra);
+    }
+    var c11 = cusp(1 / 3, true), c12 = cusp(2 / 3, true), c2 = cusp(2 / 3, false), c3 = cusp(1 / 3, false);
+    return { asc: asc, mc: mc, cusps: [asc, c2, c3, norm360(mc + 180), norm360(c11 + 180), norm360(c12 + 180), norm360(asc + 180), norm360(c2 + 180), norm360(c3 + 180), mc, c11, c12] };
+  }
+  /* A chart for any moment and place, in the same shape as PROFILE. */
+  function chartFor(A, spec) {
+    var t = ms(spec.utc), time = A.MakeTime(new Date(t));
+    var ramc = norm360(A.SiderealTime(time) * 15 + spec.lng);
+    var h = placidus(ramc, obliquity(A, time), spec.lat), planets = {}, rx = {};
+    BODIES.forEach(function (n) { planets[n] = lon(A, n, t); if (n !== 'Sun' && n !== 'Moon' && speed(A, n, t) < 0) rx[n] = true; });
+    return { id: spec.id, name: spec.name, born: spec.born, utc: spec.utc, asc: h.asc, mc: h.mc, cusps: h.cusps, planets: planets, rx: rx };
+  }
+  var SIGN_FACE = {
+    Aries: 'bold, first and fast', Taurus: 'calm, solid and worth the price', Gemini: 'clever, chatty and quick', Cancer: 'warm and protective, like home',
+    Leo: 'confident, creative and proud', Virgo: 'careful, useful and well made', Libra: 'polished, fair and pleasant to deal with', Scorpio: 'deep, private and powerful',
+    Sagittarius: 'optimistic, big-picture and a little bit teacher', Capricorn: 'serious, reliable and built to last', Aquarius: 'new, smart and a bit unusual', Pisces: 'gentle, imaginative and caring'
+  };
+  var ROLE_ITS = { Sun: 'its purpose', Moon: 'its customers', Mercury: 'its message', Venus: 'its money and appeal', Mars: 'its drive', Jupiter: 'its growth', Saturn: 'its structure', ASC: 'its image', MC: 'its reputation' };
+  var ROLE_YOUR = { Sun: 'your identity', Moon: 'your feelings', Mercury: 'your thinking', Venus: 'your values', Mars: 'your energy', Jupiter: 'your luck', Saturn: 'your discipline', ASC: 'your presence', MC: 'your career' };
+  var SYN_POINTS = ['Sun', 'Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'ASC', 'MC'];
+  function pointLon(C, n) { return n === 'ASC' ? C.asc : n === 'MC' ? C.mc : C.planets[n]; }
+  function synastry(B, P, orb) {
+    var out = [];
+    SYN_POINTS.forEach(function (a) {
+      SYN_POINTS.forEach(function (b) {
+        var d = Math.abs(norm180(pointLon(B, a) - pointLon(P, b)));
+        ASPECTS.forEach(function (asp) {
+          var o = Math.abs(d - asp.angle); if (o > (orb || 3)) return;
+          var tone = asp.tone === 'blend' ? 'blend' : asp.tone;
+          var text = tone === 'easy' ? ROLE_ITS[a] + ' supports ' + ROLE_YOUR[b] + '.' : tone === 'hard' ? ROLE_ITS[a] + ' pushes on ' + ROLE_YOUR[b] + ': friction that makes you grow, or wears you out if ignored.' : ROLE_ITS[a] + ' is fused with ' + ROLE_YOUR[b] + ': this part of the business is very personal to you.';
+          out.push({ its: a, yours: b, aspect: asp.name, orb: round1(o), tone: tone, title: 'Its ' + (a === 'ASC' ? 'rising' : a === 'MC' ? 'Midheaven' : a) + ' ' + asp.word + ' your ' + (b === 'ASC' ? 'rising' : b === 'MC' ? 'Midheaven' : b), text: text.charAt(0).toUpperCase() + text.slice(1) });
+        });
+      });
+    });
+    return out.sort(function (x, y) { return x.orb - y.orb; });
+  }
+  var its = function (s) { return String(s).replace(/\byour\b/g, 'its').replace(/\bYour\b/g, 'Its'); };
+  function businessReading(A, spec, P, when) {
+    P = P || PROFILE; var C = chartFor(A, spec), t = ms(when || Date.now());
+    var at = function (n) { var l = pointLon(C, n), h = houseOf(l, C.cusps); return { name: n, glyph: GLYPH[n] || '', lon: l, pos: fmtPos(l), sign: signName(l), house: h, houseName: HOUSE_NAME[h], rx: !!C.rx[n] }; };
+    var planets = BODIES.map(at), S = at('Sun'), M = at('Moon'), V = at('Venus'), J = at('Jupiter'), ascSign = signName(C.asc), mcSign = signName(C.mc);
+    var house = function (h) { var sign = signName(C.cusps[h - 1]), ruler = RULER[sign], ra = at(ruler); return { house: h, name: HOUSE_NAME[h], theme: HOUSE_THEME[h], pos: fmtPos(C.cusps[h - 1]), sign: sign, style: SIGN_MONEY[sign], ruler: ruler, rulerAt: ra, inside: BODIES.filter(function (n) { return houseOf(C.planets[n], C.cusps) === h; }).map(at) }; };
+    var h2 = house(2), h10 = house(10);
+    var cap = function (x) { return x.charAt(0).toUpperCase() + x.slice(1); };
+    var inHouse = function (p) { return 'its ' + ordinal(p.house) + ' house (' + HOUSE_NAME[p.house] + ')'; };
+    var reads = [
+      { emoji: '☉', title: 'Sun in ' + S.sign + ', ' + ordinal(S.house) + ' house', text: spec.name + ' shines through ' + HOUSE_THEME[S.house] + '. In ' + S.sign + ' it comes across as ' + SIGN_FACE[S.sign] + '.' },
+      { emoji: '↑', title: ascSign + ' rising', text: 'First impressions: ' + SIGN_FACE[ascSign] + '. That is the face people meet before they know what it does.' },
+      { emoji: '☽', title: 'Moon in ' + M.sign + ', ' + ordinal(M.house) + ' house', text: 'Its customers want it to feel ' + SIGN_FACE[M.sign] + '. What they care about most sits in its ' + ordinal(M.house) + ' house: ' + HOUSE_THEME[M.house] + '.' },
+      { emoji: '♀', title: 'Venus in ' + V.sign + ', ' + ordinal(V.house) + ' house', text: 'Venus shows what it earns from and how to price it. ' + cap(SIGN_MONEY[V.sign]) + '. Its appeal lives in ' + inHouse(V) + '.' },
+      { emoji: '♃', title: 'Jupiter in ' + J.sign + ', ' + ordinal(J.house) + ' house', text: 'Where it grows most easily: its ' + ordinal(J.house) + ' house, ' + HOUSE_THEME[J.house] + '.' },
+      { emoji: '$', title: 'Income house in ' + h2.sign, text: 'Its income house starts in ' + h2.sign + '. ' + cap(h2.style) + '. Its ruler, ' + h2.ruler + ', is in ' + inHouse(h2.rulerAt) + ', so income follows ' + HOUSE_THEME[h2.rulerAt.house] + '.' + (h2.inside.length ? ' Inside the house: ' + h2.inside.map(function (x) { return x.name; }).join(', ') + '.' : '') },
+      { emoji: '★', title: 'Midheaven in ' + mcSign, text: 'Its reputation: known as ' + SIGN_FACE[mcSign] + '. The ruler, ' + h10.ruler + ', sits in ' + inHouse(h10.rulerAt) + ': the name is built through ' + HOUSE_THEME[h10.rulerAt.house] + '.' }
+    ].map(function (x) { x.text = its(x.text); return x; });
+    var now = transitsAt(A, C, t).map(function (x) { return Object.assign({}, x, { title: its(x.title), text: its(x.text) }); });
+    var cycles = bigCycles(A, C, t).map(function (b) { b.now = b.now && its(b.now); b.nextMoney.forEach(function (n) { n.text = n.text && its(n.text); }); return b; });
+    var d = new Date(t), y = d.getFullYear();
+    return {
+      spec: spec, chart: C, planets: planets, asc: fmtPos(C.asc), mc: fmtPos(C.mc), big: { sun: S.sign, moon: M.sign, rising: ascSign }, reads: reads, moneyHouses: MONEY_HOUSES.map(house),
+      withYou: synastry(C, P, 3).slice(0, 8), transits: now.slice(0, 6), cycles: cycles,
+      numbers: { lifePath: lifePath(C), year: y, personalYear: personalYear(C, y), nextYear: personalYear(C, y + 1), name: nameNumber(spec.name) }
+    };
+  }
+
   var api = {
-    version: 1, PROFILE: PROFILE, SIGNS: SIGNS, SIGN_GLYPH: SIGN_GLYPH, GLYPH: GLYPH, PURPOSES: PURPOSES, RULES: RULES, HOUSE_NAME: HOUSE_NAME, HOUSE_THEME: HOUSE_THEME, MONEY_HOUSES: MONEY_HOUSES, NUM_MONEY: NUM_MONEY,
+    version: 1, PROFILE: PROFILE, BUSINESSES: BUSINESSES, SIGNS: SIGNS, SIGN_GLYPH: SIGN_GLYPH, GLYPH: GLYPH, PURPOSES: PURPOSES, RULES: RULES, HOUSE_NAME: HOUSE_NAME, HOUSE_THEME: HOUSE_THEME, MONEY_HOUSES: MONEY_HOUSES, NUM_MONEY: NUM_MONEY,
     util: { norm360: norm360, norm180: norm180, signName: signName, fmtPos: fmtPos, houseOf: houseOf, ordinal: ordinal, dateKey: dateKey, reduceNum: reduceNum, localDays: localDays },
     lon: lon, speed: speed, phaseInfo: phaseInfo,
     moneyMap: moneyMap, moneyPoints: moneyPoints, numbers: numbers, lifePath: lifePath, personalYear: personalYear, personalMonth: personalMonth, personalDay: personalDay, nameNumber: nameNumber,
     matrix: matrix, humanDesign: humanDesign,
     skyNow: skyNow, transitsAt: transitsAt, vocWindows: vocWindows, moonIngresses: moonIngresses,
     retroPeriods: retroPeriods, eclipses: eclipses, lunations: lunations, houseChanges: houseChanges, keyDates: keyDates, bigCycles: bigCycles,
+    chartFor: chartFor, placidus: placidus, businessReading: businessReading, synastry: synastry,
     planetaryHours: planetaryHours, dayFacts: dayFacts, scoreDay: scoreDay, scoreAll: scoreAll, rangeContext: rangeContext, calendar: calendar, rankFor: rankFor
   };
   if (typeof window !== 'undefined') window.moneySky = api;
